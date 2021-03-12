@@ -1,12 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
-    <OutputType>Library</OutputType>
+    <TargetFramework>net5.0</TargetFramework>
+    <OutputType>Exe</OutputType>
     <AssemblyName>Circuit</AssemblyName>
     <Product>Circuit</Product>
     <Copyright>Copyright ©  2020</Copyright>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
+    <StartupObject>Circuit.Simulate</StartupObject>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DefineConstants>;DEBUG;$([MSBUILD]::GETTARGETFRAMEWORKIDENTIFIER('$(TARGETFRAMEWORK)'));$([MSBUILD]::GETTARGETFRAMEWORKIDENTIFIER('$(TARGETFRAMEWORK)'))$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)', 2));</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ComputerAlgebra\ComputerAlgebra\ComputerAlgebra.csproj" />
@@ -22,5 +27,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageReference Include="System.Data.DataSetExtensions" Version="4.5.0" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="5.0.0" />
+    <PackageReference Include="MathNet.Numerics" Version="4.12.0" />
   </ItemGroup>
 </Project>
