@@ -36,7 +36,9 @@ public sealed class MainWindow : Window
     };
 
     private readonly TabControl documents = new TabControl();
-    private readonly ListBox componentList = new ListBox();
+    private readonly TreeView componentList = new TreeView();
+    private readonly TextBox componentFilter = new TextBox { Watermark = "Filter components" };
+    private List<ComponentListItem> allComponents = new List<ComponentListItem>();
     private readonly PropertyInspector propertyInspector = new PropertyInspector();
     private readonly TextBlock status = new TextBlock { Text = "Ready", VerticalAlignment = VerticalAlignment.Center };
     private readonly AppSettings settings = AppSettings.Load();
@@ -81,11 +83,18 @@ public sealed class MainWindow : Window
         };
 
         componentList.Margin = new global::Avalonia.Thickness(6);
-        componentList.DoubleTapped += (_, _) => ActivateSelectedComponent();
         componentList.SelectionChanged += (_, _) => ActivateSelectedComponent();
+        componentFilter.Margin = new global::Avalonia.Thickness(6, 0, 6, 4);
+        componentFilter.TextChanged += (_, _) => ApplyComponentFilter();
         PopulateComponents();
 
-        Border componentsPanel = Panel("Components", componentList);
+        // The library adds ~90 parts to what was a short list, so it needs a filter to stay usable.
+        DockPanel componentsContent = new DockPanel();
+        DockPanel.SetDock(componentFilter, Dock.Top);
+        componentsContent.Children.Add(componentFilter);
+        componentsContent.Children.Add(componentList);
+
+        Border componentsPanel = Panel("Components", componentsContent);
         Grid.SetColumn(componentsPanel, 0);
         content.Children.Add(componentsPanel);
 
@@ -622,12 +631,63 @@ public sealed class MainWindow : Window
                 }
             }
 
-            componentList.ItemsSource = items.OrderBy(i => i.Name).ToList();
+            // Three tiers, so a generic Diode does not sit beside the specific ones: the handful
+            // of everyday components, then the remaining generic types, then the part libraries.
+            allComponents = items
+                .Select(i => i.InCategory(CommonComponents.Contains(i.ComponentType!) ? BasicCategory : TypesCategory))
+                .Concat(ComponentLibrary.Load().Select(i => new ComponentListItem(i)))
+                .ToList();
+            ApplyComponentFilter();
+        }
+
+        private void ApplyComponentFilter()
+        {
+            string filter = componentFilter.Text?.Trim() ?? string.Empty;
+            IEnumerable<ComponentListItem> matches = filter.Length == 0
+                ? allComponents
+                : allComponents.Where(i =>
+                    i.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    i.Category.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    i.Description.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+            // Group into collapsible categories so a generic Diode does not sit at the same level
+            // as the forty-odd specific diodes. While filtering, expand everything that matched -
+            // hiding results behind a collapsed header would defeat the search.
+            List<TreeViewItem> categories = new List<TreeViewItem>();
+            foreach (IGrouping<string, ComponentListItem> group in matches.GroupBy(i => i.Category).OrderBy(i => CategoryOrder(i.Key)).ThenBy(i => i.Key))
+            {
+                TreeViewItem category = new TreeViewItem
+                {
+                    Header = $"{group.Key}  ({group.Count()})",
+                    FontWeight = FontWeight.Bold,
+                    IsExpanded = filter.Length > 0 || group.Key == BasicCategory,
+                    ItemsSource = group
+                        .OrderBy(i => i.Name)
+                        .Select(i => new TreeViewItem { Header = i.Name, Tag = i, FontWeight = FontWeight.Normal })
+                        .ToList()
+                };
+                categories.Add(category);
+            }
+            componentList.ItemsSource = categories;
+        }
+
+        // Named to match the WPF app's palette (ComponentLibrary.xaml.cs), so the layout is
+        // familiar: "Generic" is the unconfigured component you fill in yourself, as opposed to a
+        // pre-configured part from a library.
+        private const string BasicCategory = "Common";
+        private const string TypesCategory = "Generic";
+
+        /// <summary>Basic first, then the generic types, then the part libraries alphabetically.</summary>
+        private static int CategoryOrder(string Category)
+        {
+            if (Category == BasicCategory) return 0;
+            if (Category == TypesCategory) return 1;
+            return 2;
         }
 
         private void ActivateSelectedComponent()
         {
-            if (componentList.SelectedItem is not ComponentListItem item || ActiveCanvas == null)
+            if (componentList.SelectedItem is not TreeViewItem node || node.Tag is not ComponentListItem item || ActiveCanvas == null)
                 return;
 
             if (item.ComponentType == typeof(Conductor))
@@ -637,7 +697,7 @@ public sealed class MainWindow : Window
                 return;
             }
 
-            ActiveCanvas.PendingComponent = (CircuitComponent)Activator.CreateInstance(item.ComponentType)!;
+            ActiveCanvas.PendingComponent = item.Create();
             status.Text = $"Place {item.Name}: click schematic";
         }
 
@@ -812,22 +872,49 @@ public sealed class MainWindow : Window
 
 internal sealed class ComponentListItem
 {
-    public ComponentListItem(Type componentType)
+    private readonly LibraryPart? part;
+
+    public ComponentListItem(Type componentType, string category = "")
     {
         ComponentType = componentType;
         CircuitComponent component = (CircuitComponent)Activator.CreateInstance(componentType)!;
         Name = component.TypeName;
+        Category = category;
         Description = componentType.CustomAttribute<DescriptionAttribute>()?.Description ?? componentType.Name;
     }
 
-    public Type ComponentType { get; }
+    /// <summary>This item filed under a different category.</summary>
+    public ComponentListItem InCategory(string category)
+    {
+        return ComponentType != null ? new ComponentListItem(ComponentType, category) : this;
+    }
+
+    public ComponentListItem(LibraryPart part)
+    {
+        this.part = part;
+        Name = part.Name;
+        Category = part.Category;
+        Description = part.Description;
+    }
+
+    /// <summary>Null for library parts, which are built by deserializing their library entry.</summary>
+    public Type? ComponentType { get; }
 
     public string Name { get; }
 
+    public string Category { get; }
+
     public string Description { get; }
+
+    public CircuitComponent Create()
+    {
+        if (part != null)
+            return (CircuitComponent)part.Create();
+        return (CircuitComponent)Activator.CreateInstance(ComponentType!)!;
+    }
 
     public override string ToString()
     {
-        return Name;
+        return Category.Length > 0 ? $"{Name}  ({Category})" : Name;
     }
 }
