@@ -1,4 +1,5 @@
 using Circuit;
+using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using LiveSPICE.Avalonia;
 using Xunit;
@@ -7,7 +8,7 @@ namespace LiveSPICE.Avalonia.Tests;
 
 public sealed class SchematicCanvasInteractionTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void ClickSelectsSymbol()
     {
         TestContext context = TestContext.Load();
@@ -17,7 +18,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Same(symbol.Component, context.Canvas.SelectedObjects.Single());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ControlClickTogglesSelection()
     {
         TestContext context = TestContext.Load();
@@ -32,7 +33,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Single(context.Canvas.SelectedObjects);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void DragSelectedSymbolRecordsOneUndo()
     {
         TestContext context = TestContext.Load();
@@ -52,7 +53,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Equal(before + new Coord(30, 0), symbol.Position);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void RectangleDragSelectsMultipleElements()
     {
         TestContext context = TestContext.Load();
@@ -64,7 +65,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.True(context.Canvas.SelectedObjects.Count >= 2);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void DeleteSelectionIsUndoable()
     {
         TestContext context = TestContext.Load();
@@ -78,7 +79,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Equal(before, context.Document.Schematic.Elements.Count());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void WireClicksCreateUndoableWire()
     {
         TestContext context = TestContext.Load();
@@ -95,7 +96,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Equal(before, context.Document.Schematic.Wires.Count());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void CopyPasteDuplicatesSelection()
     {
         TestContext context = TestContext.Load();
@@ -112,7 +113,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Equal(before, context.Document.Schematic.Elements.Count());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void DrawTransformMatchesSpeakerTerminals()
     {
         TestContext context = TestContext.Load();
@@ -122,7 +123,7 @@ public sealed class SchematicCanvasInteractionTests
             Assert.Equal(speaker.MapTerminal(terminal), SchematicCanvas.TestTransformPoint(speaker, speaker.Component.LayoutSymbol().MapTerminal(terminal)));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void DrawTransformMatchesGroundTerminal()
     {
         Symbol ground = new Symbol(new Ground()) { Position = new Coord(120, -40), Rotation = 1 };
@@ -131,7 +132,7 @@ public sealed class SchematicCanvasInteractionTests
         Assert.Equal(ground.MapTerminal(terminal), SchematicCanvas.TestTransformPoint(ground, ground.Component.LayoutSymbol().MapTerminal(terminal)));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ResistorValueAndNameTextAreOutsideBody()
     {
         SymbolLayout layout = new Resistor().LayoutSymbol();

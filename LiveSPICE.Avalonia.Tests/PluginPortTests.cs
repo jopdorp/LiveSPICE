@@ -1,5 +1,6 @@
 using AudioPlugSharp;
 using System.IO;
+using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using LiveSPICE.Avalonia;
 using LiveSPICE.PluginCore;
@@ -10,8 +11,6 @@ namespace LiveSPICE.Avalonia.Tests;
 
 public class PluginPortTests
 {
-    private static bool avaloniaInitialized;
-
     [Fact]
     public void LinuxPluginInitializesMonoPorts()
     {
@@ -38,10 +37,9 @@ public class PluginPortTests
         Assert.DoesNotContain("LiveSPICE.PluginLinux.DefaultSchematic.schx", typeof(LiveSPICELinuxPlugin).Assembly.GetManifestResourceNames());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void LinuxPluginCreatesAvaloniaEditorBoundToProcessor()
     {
-        EnsureAvalonia();
         LiveSPICELinuxPlugin plugin = new LiveSPICELinuxPlugin();
         PluginEditorWindow editor = RunOnUiThread(plugin.CreateEditorWindow);
         try
@@ -63,10 +61,9 @@ public class PluginPortTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void PluginEditorSettingsUpdateSharedProcessor()
     {
-        EnsureAvalonia();
         SimulationProcessor processor = new SimulationProcessor();
         PluginEditorWindow editor = RunOnUiThread(() => new PluginEditorWindow(processor));
         try
@@ -164,10 +161,9 @@ public class PluginPortTests
         Assert.DoesNotContain(output[0], double.IsNaN);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void PluginLoadsMxrPhase90WithControlsAndProducesStableAudio()
     {
-        EnsureAvalonia();
         LiveSPICELinuxPlugin plugin = new LiveSPICELinuxPlugin();
         string schematicPath = FindFixture("Tests/Examples/MXR Phase 90.schx");
         plugin.LoadSchematic(schematicPath);
@@ -268,15 +264,6 @@ public class PluginPortTests
                     break;
             }
         }
-    }
-
-    private static void EnsureAvalonia()
-    {
-        if (avaloniaInitialized)
-            return;
-
-        Program.BuildAvaloniaApp().SetupWithoutStarting();
-        avaloniaInitialized = true;
     }
 
     private static T RunOnUiThread<T>(Func<T> action)
