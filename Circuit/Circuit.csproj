@@ -13,11 +13,13 @@
     <ProjectReference Include="..\Util\Util.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="Components\Diodes.xml" />
-    <Content Include="Components\OpAmps.xml" />
-    <Content Include="Components\Readme.txt" />
-    <Content Include="Components\Transistors.xml" />
-    <Content Include="Components\Tubes.xml">
+    <!-- The whole library is copied: only Tubes.xml used to be, so a host looking beside its
+         executable found one library out of four. -->
+    <Content Include="Components\*.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>Components\%(Filename)%(Extension)</Link>
+    </Content>
+    <Content Include="Components\Readme.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
