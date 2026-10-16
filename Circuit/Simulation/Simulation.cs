@@ -266,6 +266,23 @@ namespace Circuit
             foreach (KeyValuePair<Expression, LinqExpr> i in parameters)
                 code.DeclInit(i.Key, i.Value);
 
+            // Parameters are fixed for the whole call, so compute anything that depends only on them once here instead of per sample.
+            ArgumentSubexpressions hoist = new ArgumentSubexpressions(arguments);
+            foreach (SolutionSet ss in Solution.Solutions)
+            {
+                if (ss is LinearSolutions S)
+                    hoist.Visit(S.Solutions.Select(i => i.Right));
+                else if (ss is NewtonIteration NI)
+                {
+                    hoist.Visit(NI.Equations.SelectMany(i => i.Select(j => j.Value)));
+                    if (NI.KnownDeltas != null)
+                        hoist.Visit(NI.KnownDeltas.Select(i => i.Right));
+                }
+            }
+            hoist.Visit(Output);
+            foreach (Expression i in hoist.Found)
+                code.DeclInit(i, code.Compile(i));
+
             // Create arrays for linear systems.
             int M = Solution.Solutions.OfType<NewtonIteration>().Max(i => i.Equations.Count(), 0);
             int N = Solution.Solutions.OfType<NewtonIteration>().Max(i => i.UnknownDeltas.Count(), 0);
@@ -437,6 +454,38 @@ namespace Circuit
 
             var lambda = code.Build<Action<int, double, double[][], double[][], double[]>>();
             return lambda.Compile();
+        }
+
+        // Finds the largest subexpressions that depend only on the arguments.
+        private class ArgumentSubexpressions : ExpressionVisitor<bool>
+        {
+            private readonly HashSet<Expression> arguments;
+            public readonly HashSet<Expression> Found = new HashSet<Expression>();
+
+            public ArgumentSubexpressions(IEnumerable<Expression> Arguments) { arguments = new HashSet<Expression>(Arguments); }
+
+            public void Visit(IEnumerable<Expression> E) { All(E); }
+
+            private bool All(IEnumerable<Expression> E)
+            {
+                List<Expression> terms = E.ToList();
+                bool[] only = terms.Select(Visit).ToArray();
+                if (only.All(i => i))
+                    return true;
+                for (int i = 0; i < terms.Count; i++)
+                    if (only[i] && !(terms[i] is Atom))
+                        Found.Add(terms[i]);
+                return false;
+            }
+
+            protected override bool VisitConstant(Constant C) { return true; }
+            protected override bool VisitVariable(Variable V) { return arguments.Contains(V); }
+            protected override bool VisitSum(Sum A) { return All(A.Terms); }
+            protected override bool VisitProduct(Product M) { return All(M.Terms); }
+            protected override bool VisitBinary(Binary B) { return All(new[] { B.Left, B.Right }); }
+            protected override bool VisitUnary(Unary U) { return All(new[] { U.Operand }); }
+            protected override bool VisitCall(Call F) { return F.Target is UnknownFunction ? false : All(F.Arguments); }
+            protected override bool VisitUnknown(Expression E) { return false; }
         }
 
         // Solve a system of linear equations
