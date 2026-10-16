@@ -21,14 +21,9 @@ namespace LiveSPICEVst
 
             set
             {
-                if (Sections[0].PotValue != value)
+                foreach (var section in Sections)
                 {
-                    foreach (var section in Sections)
-                    {
-                        section.PotValue = value;
-                    }
-
-                    NeedUpdate = true;
+                    section.PotValue = value;
                 }
             }
         }

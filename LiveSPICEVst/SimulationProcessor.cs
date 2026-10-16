@@ -33,8 +33,6 @@ namespace LiveSPICEVst
                     sampleRate = value;
 
                     needRebuild = true;
-
-                    delayUpdateSamples = (int)(sampleRate * .1);
                 }
             }
         }
@@ -73,10 +71,9 @@ namespace LiveSPICEVst
 
         Circuit.Circuit circuit = null;
         Simulation simulation = null;
-        bool needUpdate = false;
         bool needRebuild = false;
-        int updateSamplesElapsed = 0;
-        int delayUpdateSamples = 0;
+        Analysis.Parameter[] parameters = new Analysis.Parameter[0];
+        double[] parameterValues = new double[0];
         Exception simulationUpdateException = null;
 
         public SimulationProcessor()
@@ -201,7 +198,7 @@ namespace LiveSPICEVst
                 {
                     if (circuit != null)
                     {
-                        UpdateSimulation(needRebuild);
+                        UpdateSimulation();
 
                         needRebuild = false;
                     }
@@ -218,15 +215,6 @@ namespace LiveSPICEVst
                 {
                     foreach (var component in InteractiveComponents)
                     {
-                        if (component.NeedUpdate)
-                        {
-                            needUpdate = true;
-
-                            component.NeedUpdate = false;
-
-                            updateSamplesElapsed = 0;
-                        }
-
                         if (component.NeedRebuild)
                         {
                             needRebuild = true;
@@ -235,23 +223,17 @@ namespace LiveSPICEVst
                         }
                     }
 
-                    if (needUpdate || needRebuild)
+                    if (needRebuild)
                     {
-                        // Delay updates until user input settles
-                        if (needRebuild || (updateSamplesElapsed > delayUpdateSamples))
-                        {
-                            UpdateSimulation(needRebuild);
+                        UpdateSimulation();
 
-                            needRebuild = false;
-                            needUpdate = false;
-                        }
-                        else
-                        {
-                            updateSamplesElapsed += numSamples;
-                        }
+                        needRebuild = false;
                     }
 
-                    simulation.Run(numSamples, audioInputs, audioOutputs);
+                    for (int i = 0; i < parameters.Length; i++)
+                        parameterValues[i] = parameters[i].Value;
+
+                    simulation.Run(numSamples, audioInputs, audioOutputs, parameterValues);
                 }
             }
         }
@@ -264,28 +246,23 @@ namespace LiveSPICEVst
         /// <summary>
         /// Update the simulation asynchronously
         /// </summary>
-        /// <param name="rebuild">Whether a full simulation rebuild is required</param>
-        void UpdateSimulation(bool rebuild)
+        void UpdateSimulation()
         {
             int id = Interlocked.Increment(ref update);
             new Task(() =>
             {
                 try
                 {
-                    TransientSolution ts = AudioSimulationFactory.Solve(circuit, sampleRate, oversample);
+                    Analysis analysis = circuit.Analyze();
+                    Simulation next = AudioSimulationFactory.Create(circuit, analysis, sampleRate, oversample, iterations);
 
                     lock (sync)
                     {
                         if (id > clock)
                         {
-                            if (rebuild)
-                            {
-                                simulation = AudioSimulationFactory.Create(circuit, ts, oversample, iterations);
-                            }
-                            else
-                            {
-                                simulation.Solution = ts;
-                            }
+                            simulation = next;
+                            parameters = analysis.Parameters.ToArray();
+                            parameterValues = new double[parameters.Length];
 
                             clock = id;
                         }
