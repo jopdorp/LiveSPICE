@@ -216,9 +216,7 @@ namespace Circuit
                         List<int> rest = Enumerable.Range(0, eqs.Count).Except(rows).ToList();
                         List<int> proj = rest.Where(i => lin.Any(j => !eqs[i][j].EqualsZero())).ToList();
                         List<Expression> x = lin.Concat(proj.Select(i => Variable.New("z" + solutions.Count + "_" + i))).ToList();
-                        List<LinearCombination> A = rows.Select(i => LinearCombination.New(Sum.TermsOf(eqs[i].Substitute(zero).Expand())
-                            .GroupBy(j => Product.New(Product.TermsOf(j).Where(k => k.DependsOn(t))), j => Product.New(Product.TermsOf(j).Where(k => !k.DependsOn(t))))
-                            .Select(j => new KeyValuePair<Expression, Expression>(j.Key, Sum.New(j))).Concat(lin.Select(j => new KeyValuePair<Expression, Expression>(j, eqs[i][j])))))
+                        List<LinearCombination> A = rows.Select(i => LinearCombination.New(Factors(eqs[i].Substitute(zero)).Concat(lin.Select(j => new KeyValuePair<Expression, Expression>(j, eqs[i][j])))))
                             .Concat(proj.Select((i, r) => LinearCombination.New(lin.Select(j => new KeyValuePair<Expression, Expression>(j, eqs[i][j])).Append(new KeyValuePair<Expression, Expression>(x[lin.Count + r], -1))))).ToList();
                         List<Expression> b = A.SelectMany(i => i.Select(k => k.Key)).Distinct().Except(x).ToList();
 
@@ -236,7 +234,9 @@ namespace Circuit
                         List<Expression> xw = Mb.Select((i, r) => Sum.New(w[r].Left, Sum.New(((LinearCombination)i.Right).Where(k => k.Key.DependsOn(F.Unknowns)).Select(k => Product.New(k.Key, k.Value))))).ToList();
                         block = new ParameterSolutions(w, Mb, A);
                         solved = lin.Select((i, r) => Arrow.New(i, xw[r] - NewtonIteration.DeltaOf(i))).Concat(solved).ToList();
-                        nonlinear = new SystemOfEquations(rest.Select(i => Equal.New(eqs[i].Substitute(zero) + (proj.Contains(i) ? xw[lin.Count + proj.IndexOf(i)] : 0), 0)), nonlinear.Unknowns.Except(lin));
+                        List<Expression> ny = nonlinear.Unknowns.Except(lin).ToList();
+                        nonlinear = new SystemOfEquations(rest.Select(i => LinearCombination.New(ny, eqs[i].Substitute(zero) + (proj.Contains(i) ? xw[lin.Count + proj.IndexOf(i)] : 0))
+                            .Select(k => new KeyValuePair<Expression, Expression>(k.Key, Sum.New(Factors(k.Value).Select(j => Product.New(j.Value, j.Key)))))), ny);
                     }
 
                     // Initial guess for y[t] = y[t - h].
@@ -271,6 +271,14 @@ namespace Circuit
                 solutions,
                 initial);
         }
+        // Terms of f grouped by their per-sample factor, with parameter-only coefficients.
+        private static IEnumerable<KeyValuePair<Expression, Expression>> Factors(Expression f)
+        {
+            return Sum.TermsOf(f.Expand())
+                .GroupBy(j => Product.New(Product.TermsOf(j).Where(k => k.DependsOn(t))), j => Product.New(Product.TermsOf(j).Where(k => !k.DependsOn(t))))
+                .Select(j => new KeyValuePair<Expression, Expression>(j.Key, Sum.New(j)));
+        }
+
         public static TransientSolution Solve(Analysis Analysis, Expression TimeStep, ILog Log) { return Solve(Analysis, TimeStep, new Arrow[] { }, Log); }
         public static TransientSolution Solve(Analysis Analysis, Expression TimeStep) { return Solve(Analysis, TimeStep, new Arrow[] { }, new NullLog()); }
 
