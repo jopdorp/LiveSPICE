@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\LiveSPICE.Avalonia\LiveSPICE.Avalonia.csproj" />
     <ProjectReference Include="..\LiveSPICE.PluginCore\LiveSPICE.PluginCore.csproj" />
+    <ProjectReference Include="..\LiveSPICE.PluginLinux\LiveSPICE.PluginLinux.csproj" />
     <ProjectReference Include="..\Circuit\Circuit.csproj" />
   </ItemGroup>
 </Project>
