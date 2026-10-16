@@ -38,6 +38,8 @@ public class SimulationProcessor
 
     public string SchematicPath { get; private set; } = string.Empty;
 
+    public bool IsReady => simulation != null;
+
     public string SchematicName => System.IO.Path.GetFileNameWithoutExtension(SchematicPath);
 
     public double SampleRate

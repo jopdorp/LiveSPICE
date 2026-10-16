@@ -10,6 +10,8 @@ public class DoubleThrowWrapper : ComponentWrapper<IButtonControl>
     {
     }
 
+    public int Position => Sections[0].Position;
+
     public bool Engaged
     {
         get => engaged;
