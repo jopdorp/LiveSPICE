@@ -14,6 +14,9 @@
 
 #define LIVESPICE_GENERIC_URI "https://livespice.org/plugins/generic"
 #define LIVESPICE_GENERIC_UI_URI "https://livespice.org/plugins/generic#gtk3-ui"
+#define LIVESPICE__control "https://livespice.org/ns/plugin#control"
+#define LIVESPICE__controlName "https://livespice.org/ns/plugin#controlName"
+#define LIVESPICE__controlValue "https://livespice.org/ns/plugin#controlValue"
 
 typedef enum {
     PORT_INPUT = 0,
@@ -93,6 +96,9 @@ typedef struct {
     LV2UI_Resize* resize;
     LV2_URID_Map* map;
     LV2_URID atom_event_transfer;
+    LV2_URID control;
+    LV2_URID control_name;
+    LV2_URID control_value;
     LV2_Atom_Forge forge;
     GtkWidget* root;
     GtkWidget* path_label;
@@ -474,6 +480,8 @@ static gboolean draw_knob(GtkWidget* widget, cairo_t* cr, gpointer data)
     return false;
 }
 
+static void send_control(GtkWidget* widget, double value);
+
 static gboolean knob_button_press(GtkWidget* widget, GdkEventButton* event, gpointer data)
 {
     (void)widget;
@@ -503,6 +511,7 @@ static gboolean knob_motion(GtkWidget* widget, GdkEventMotion* event, gpointer d
 
     knob->value = clamp_unit(knob->drag_value + ((knob->drag_y - event->y_root) / 120.0));
     gtk_widget_queue_draw(widget);
+    send_control(widget, knob->value);
     return true;
 }
 
@@ -521,6 +530,7 @@ static gboolean knob_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer d
 
     knob->value = clamp_unit(knob->value + delta);
     gtk_widget_queue_draw(widget);
+    send_control(widget, knob->value);
     return true;
 }
 
@@ -546,7 +556,19 @@ static GtkWidget* create_knob(double value, const char* name)
     return knob->area;
 }
 
-static GtkWidget* create_pot_control(const SchematicControl* control)
+static void bind_control(LiveSpiceGenericUi* self, GtkWidget* widget, const char* name)
+{
+    g_object_set_data(G_OBJECT(widget), "livespice-ui", self);
+    g_object_set_data_full(G_OBJECT(widget), "livespice-name", g_strdup(name), g_free);
+}
+
+static void switch_changed(GtkComboBox* combo, gpointer data)
+{
+    (void)data;
+    send_control(GTK_WIDGET(combo), gtk_combo_box_get_active(combo));
+}
+
+static GtkWidget* create_pot_control(LiveSpiceGenericUi* self, const SchematicControl* control)
 {
     GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     add_css_class(box, "livespice-control-card");
@@ -556,13 +578,14 @@ static GtkWidget* create_pot_control(const SchematicControl* control)
     gtk_box_pack_start(GTK_BOX(box), create_control_label(name != NULL ? name : "Pot"), false, false, 0);
 
     GtkWidget* knob = create_knob(control->value, name);
+    bind_control(self, knob, name);
     gtk_widget_set_halign(knob, GTK_ALIGN_CENTER);
     gtk_box_pack_start(GTK_BOX(box), knob, false, false, 0);
     free(name);
     return box;
 }
 
-static GtkWidget* create_switch_control(const SchematicControl* control)
+static GtkWidget* create_switch_control(LiveSpiceGenericUi* self, const SchematicControl* control)
 {
     GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     add_css_class(box, "livespice-control-card");
@@ -578,6 +601,8 @@ static GtkWidget* create_switch_control(const SchematicControl* control)
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), text);
     }
     gtk_combo_box_set_active(GTK_COMBO_BOX(combo), (int)control->value);
+    bind_control(self, combo, name);
+    g_signal_connect(combo, "changed", G_CALLBACK(switch_changed), NULL);
     add_css_class(combo, "livespice-combo");
     gtk_box_pack_start(GTK_BOX(box), combo, false, false, 0);
     free(name);
@@ -596,7 +621,7 @@ static void rebuild_control_panel(LiveSpiceGenericUi* self, const char* path)
     else {
         for (guint i = 0; i < controls->len; i++) {
             SchematicControl* control = &g_array_index(controls, SchematicControl, i);
-            GtkWidget* widget = strcmp(control->type, "switch") == 0 ? create_switch_control(control) : create_pot_control(control);
+            GtkWidget* widget = strcmp(control->type, "switch") == 0 ? create_switch_control(self, control) : create_pot_control(self, control);
             gtk_box_pack_start(GTK_BOX(self->controls_box), widget, false, false, 0);
         }
     }
@@ -616,18 +641,30 @@ static void send_schematic_path(LiveSpiceGenericUi* self, const char* path)
 
     uint8_t buffer[4096];
     lv2_atom_forge_set_buffer(&self->forge, buffer, sizeof(buffer));
+    LV2_Atom* atom = (LV2_Atom*)buffer;
+    if (lv2_atom_forge_path(&self->forge, path, (uint32_t)strlen(path) + 1) != 0)
+        self->write(self->controller, PORT_CONTROL_EVENTS, lv2_atom_total_size(atom), self->atom_event_transfer, atom);
+}
 
-    LV2_Atom_Forge_Frame sequence_frame;
-    LV2_Atom_Forge_Ref sequence_ref = lv2_atom_forge_sequence_head(&self->forge, &sequence_frame, 0);
-    if (sequence_ref == 0)
+static void send_control(GtkWidget* widget, double value)
+{
+    LiveSpiceGenericUi* self = (LiveSpiceGenericUi*)g_object_get_data(G_OBJECT(widget), "livespice-ui");
+    const char* name = (const char*)g_object_get_data(G_OBJECT(widget), "livespice-name");
+    if (self == NULL || self->map == NULL || name == NULL)
         return;
 
-    lv2_atom_forge_frame_time(&self->forge, 0);
-    if (lv2_atom_forge_path(&self->forge, path, (uint32_t)strlen(path) + 1) == 0)
+    uint8_t buffer[1024];
+    lv2_atom_forge_set_buffer(&self->forge, buffer, sizeof(buffer));
+    LV2_Atom_Forge_Frame frame;
+    if (lv2_atom_forge_object(&self->forge, &frame, 0, self->control) == 0
+        || lv2_atom_forge_key(&self->forge, self->control_name) == 0
+        || lv2_atom_forge_string(&self->forge, name, (uint32_t)strlen(name)) == 0
+        || lv2_atom_forge_key(&self->forge, self->control_value) == 0
+        || lv2_atom_forge_double(&self->forge, value) == 0)
         return;
 
-    lv2_atom_forge_pop(&self->forge, &sequence_frame);
-    LV2_Atom* atom = lv2_atom_forge_deref(&self->forge, sequence_ref);
+    lv2_atom_forge_pop(&self->forge, &frame);
+    LV2_Atom* atom = (LV2_Atom*)buffer;
     self->write(self->controller, PORT_CONTROL_EVENTS, lv2_atom_total_size(atom), self->atom_event_transfer, atom);
 }
 
@@ -710,6 +747,9 @@ static LV2UI_Handle instantiate(
 
     if (self->map != NULL) {
         self->atom_event_transfer = self->map->map(self->map->handle, LV2_ATOM__eventTransfer);
+        self->control = self->map->map(self->map->handle, LIVESPICE__control);
+        self->control_name = self->map->map(self->map->handle, LIVESPICE__controlName);
+        self->control_value = self->map->map(self->map->handle, LIVESPICE__controlValue);
         lv2_atom_forge_init(&self->forge, self->map);
     }
 
