@@ -120,7 +120,7 @@ static void run(LV2_Handle instance, uint32_t sample_count)
         float lfo = 0.5f + 0.5f * sinf(2.0f * (float)M_PI * self->phase);
         float sweep = MIN_SWEEP_HZ + (MAX_SWEEP_HZ - MIN_SWEEP_HZ) * lfo * depth;
         float tangent = tanf((float)M_PI * sweep / (float)self->sample_rate);
-        float coefficient = (1.0f - tangent) / (1.0f + tangent);
+        float coefficient = (tangent - 1.0f) / (tangent + 1.0f);
 
         float wet = self->input[sample];
         for (uint32_t stage = 0; stage < STAGE_COUNT; stage++)
