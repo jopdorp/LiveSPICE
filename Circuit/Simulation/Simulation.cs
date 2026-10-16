@@ -355,23 +355,25 @@ namespace Circuit
                                     // Solve the un-solved system.
                                     Solve(code, JxF, S.Equations, S.UnknownDeltas);
 
-                                    // Compile the pre-solved solutions.
-                                    if (S.KnownDeltas != null)
-                                        foreach (Arrow i in S.KnownDeltas)
-                                            code.DeclInit(i.Left, i.Right);
-
                                     // bool done = true
                                     LinqExpr done = code.ReDeclInit("done", true);
-                                    foreach (Expression i in S.Unknowns)
-                                    {
-                                        LinqExpr v = code[i];
-                                        LinqExpr dv = code[NewtonIteration.Delta(i)];
-
+                                    foreach (Expression i in S.UnknownDeltas)
                                         // done &= (|dv| < |v|*epsilon)
-                                        code.Add(LinqExpr.AndAssign(done, LinqExpr.LessThan(Abs(dv), MultiplyAdd(Abs(v), LinqExpr.Constant(1e-4), LinqExpr.Constant(1e-6)))));
-                                        // v += dv
-                                        code.Add(LinqExpr.AddAssign(v, dv));
-                                    }
+                                        code.Add(LinqExpr.AndAssign(done, LinqExpr.LessThan(Abs(code[i]), MultiplyAdd(Abs(code[NewtonIteration.DeltaOf(i)]), LinqExpr.Constant(1e-4), LinqExpr.Constant(1e-6)))));
+
+                                    // The pre-solved solutions do not feed the Newton system, so only the last iteration needs them.
+                                    if (S.KnownDeltas != null)
+                                        code.If(LinqExpr.OrElse(done, LinqExpr.Equal(it, LinqExpr.Constant(1))), () =>
+                                        {
+                                            foreach (Arrow i in S.KnownDeltas)
+                                                code.DeclInit(i.Left, i.Right);
+                                            foreach (Arrow i in S.KnownDeltas)
+                                                code.Add(LinqExpr.AddAssign(code[NewtonIteration.DeltaOf(i.Left)], code[i.Left]));
+                                        });
+
+                                    // v += dv
+                                    foreach (Expression i in S.UnknownDeltas)
+                                        code.Add(LinqExpr.AddAssign(code[NewtonIteration.DeltaOf(i)], code[i]));
                                     // if (done) break
                                     code.Add(LinqExpr.IfThen(done, Break));
 
