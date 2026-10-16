@@ -149,11 +149,13 @@ namespace Circuit
             foreach (SystemOfEquations F in system.Partition())
             {
                 Log.WriteLine(MessageType.Verbose, "Partition unknowns: {0}", String.Join(", ", F.Unknowns));
-                // Find linear solutions for y. Linear systems should be completely solved here.
-                F.RowReduce();
+                // Keep parameter-dependent elimination in the numerical solve.
+                bool parameterized = F.Any(i => i.DependsOn(Analysis.Parameters.Select(p => p.Expression)));
+                List<Expression> linear = F.Unknowns.Where(j => !parameterized || F.All(i => i[j] is Constant)).ToList();
+                F.RowReduce(linear);
                 List<Arrow> linearFwd = new List<Arrow>();
                 List<Arrow> linearBack = new List<Arrow>();
-                F.PartialSolve(linearFwd, linearBack);
+                F.PartialSolve(linear, linearFwd, linearBack);
                 if (linearFwd.Any())
                 {
                     solutions.Add(new LinearSolutions(linearFwd));
@@ -173,7 +175,7 @@ namespace Circuit
                         dy);
 
                     // ly is the subset of y that can be found linearly.
-                    List<Expression> ly = dy.Where(j => !nonlinear.Any(i => i[j].DependsOn(NewtonIteration.DeltaOf(j)))).ToList();
+                    List<Expression> ly = dy.Where(j => (!parameterized || nonlinear.All(i => i[j] is Constant)) && !nonlinear.Any(i => i[j].DependsOn(NewtonIteration.DeltaOf(j)))).ToList();
 
                     // Find linear solutions for dy. 
                     nonlinear.RowReduce(ly);
