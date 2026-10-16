@@ -146,6 +146,7 @@ namespace Circuit
             List<SolutionSet> solutions = new List<SolutionSet>();
 
             // Partition the system into independent systems of equations.
+            Arrow[] defaults = Analysis.Parameters.Select(i => Arrow.New(i.Expression, i.Value)).ToArray();
             foreach (SystemOfEquations F in system.Partition())
             {
                 Log.WriteLine(MessageType.Verbose, "Partition unknowns: {0}", String.Join(", ", F.Unknowns));
@@ -181,6 +182,61 @@ namespace Circuit
                     nonlinear.RowReduce(ly);
                     IEnumerable<Arrow> solved = nonlinear.Solve(ly);
 
+                    // Deltas x with parameter-only coefficients are solved from equations A·x + R·b == 0, with b the per-sample factors
+                    // of the other terms, numerically once per block as x = M·b. M are fresh symbols, so the remaining equations stay
+                    // polynomial in them and nothing symbolic divides by a parameter expression.
+                    List<Expression> lin = nonlinear.Unknowns.Where(j => parameterized && nonlinear.All(i => !i[j].DependsOn(t))).ToList();
+                    ParameterSolutions block = null;
+                    if (lin.Any())
+                    {
+                        List<LinearCombination> eqs = nonlinear.Equations.ToList();
+                        List<int> rows = Enumerable.Range(0, eqs.Count).Where(i => lin.Any(j => !eqs[i][j].EqualsZero())).ToList();
+                        // Pick the rows to solve with on the default parameter values: the shortest row with a pivot within a factor
+                        // 1000 of the largest, because M fills in with the terms of the rows it solves.
+                        double[][] A0 = rows.Select(i => lin.Select(j => (double)eqs[i][j].Evaluate(defaults)).ToArray()).ToArray();
+                        int[] size = rows.Select(i => Sum.TermsOf(eqs[i].Expand()).Count()).ToArray();
+                        List<int> pick = new List<int>();
+                        for (int j = 0; j < lin.Count; ++j)
+                        {
+                            List<int> free = Enumerable.Range(0, rows.Count).Except(pick).ToList();
+                            double max = free.Max(i => (double?)Math.Abs(A0[i][j])) ?? 0;
+                            if (max == 0)
+                                throw new Exception("Parameter-dependent linear system is singular at the default parameter values.");
+                            int p = free.Where(i => Math.Abs(A0[i][j]) >= max / 1000).OrderBy(i => size[i]).First();
+                            pick.Add(p);
+                            foreach (int i in free)
+                                for (int k = j + 1; k < lin.Count; ++k)
+                                    A0[i][k] -= A0[p][k] * A0[i][j] / A0[p][j];
+                        }
+                        rows = pick.Select(i => rows[i]).ToList();
+
+                        // The unknowns of the block are the updated values y + dy, so the equations only depend on them through the same A.
+                        // The other equations see them through z = B·(y + dy), so they stay as sparse as the per-sample factors b.
+                        List<Arrow> zero = lin.SelectMany(j => new[] { Arrow.New(j, 0), Arrow.New(NewtonIteration.DeltaOf(j), 0) }).ToList();
+                        List<int> rest = Enumerable.Range(0, eqs.Count).Except(rows).ToList();
+                        List<int> proj = rest.Where(i => lin.Any(j => !eqs[i][j].EqualsZero())).ToList();
+                        List<Expression> x = lin.Concat(proj.Select(i => Variable.New("z" + solutions.Count + "_" + i))).ToList();
+                        List<LinearCombination> A = rows.Select(i => LinearCombination.New(Sum.TermsOf(eqs[i].Substitute(zero).Expand())
+                            .GroupBy(j => Product.New(Product.TermsOf(j).Where(k => k.DependsOn(t))), j => Product.New(Product.TermsOf(j).Where(k => !k.DependsOn(t))))
+                            .Select(j => new KeyValuePair<Expression, Expression>(j.Key, Sum.New(j))).Concat(lin.Select(j => new KeyValuePair<Expression, Expression>(j, eqs[i][j])))))
+                            .Concat(proj.Select((i, r) => LinearCombination.New(lin.Select(j => new KeyValuePair<Expression, Expression>(j, eqs[i][j])).Append(new KeyValuePair<Expression, Expression>(x[lin.Count + r], -1))))).ToList();
+                        List<Expression> b = A.SelectMany(i => i.Select(k => k.Key)).Distinct().Except(x).ToList();
+
+                        // M only needs the structural nonzeros of A⁻¹·R, solve for them with random values to avoid accidental cancellation.
+                        Random random = new Random(0);
+                        double[][] S = A.Select(i => x.Concat(b).Select(j => i[j].EqualsZero() ? 0 : 1 + random.NextDouble()).ToArray()).ToArray();
+                        Simulation.Solve(S, x.Count, x.Count + b.Count);
+                        List<Arrow> Mb = x.Select((j, r) => Arrow.New(j, LinearCombination.New(b.Where((k, c) => S[r][x.Count + c] != 0)
+                            .Select(k => new KeyValuePair<Expression, Expression>(k, Variable.New("M" + solutions.Count + "_" + r + "_" + b.IndexOf(k))))))).ToList();
+
+                        // The part of M·b that is fixed within a sample is computed once, before the Newton iterations.
+                        List<Arrow> w = Mb.Select((i, r) => Arrow.New(Component.DependentVariable("w" + solutions.Count + "_" + r, t), Sum.New(((LinearCombination)i.Right).Where(k => !k.Key.DependsOn(F.Unknowns)).Select(k => Product.New(k.Key, k.Value))))).ToList();
+                        List<Expression> xw = Mb.Select((i, r) => Sum.New(w[r].Left, Sum.New(((LinearCombination)i.Right).Where(k => k.Key.DependsOn(F.Unknowns)).Select(k => Product.New(k.Key, k.Value))))).ToList();
+                        block = new ParameterSolutions(w, Mb, A);
+                        solved = lin.Select((i, r) => Arrow.New(i, xw[r] - NewtonIteration.DeltaOf(i))).Concat(solved).ToList();
+                        nonlinear = new SystemOfEquations(rest.Select(i => Equal.New(eqs[i].Substitute(zero) + (proj.Contains(i) ? xw[lin.Count + proj.IndexOf(i)] : 0), 0)), nonlinear.Unknowns.Except(lin));
+                    }
+
                     // Initial guess for y[t] = y[t - h].
                     IEnumerable<Arrow> guess = F.Unknowns.Select(i => Arrow.New(i, i.Substitute(t, t - h))).ToList();
 
@@ -188,6 +244,8 @@ namespace Circuit
                     IEnumerable<LinearCombination> equations = nonlinear.Equations.Buffer();
 
                     solutions.Add(new NewtonIteration(solved, equations, nonlinear.Unknowns, guess));
+                    if (block != null)
+                        solutions.Add(block);
                     LogExpressions(Log, MessageType.Verbose, String.Format("Non-linear Newton's method updates ({0}):", String.Join(", ", nonlinear.Unknowns)), equations.Select(i => Equal.New(i, 0)));
                     LogExpressions(Log, MessageType.Verbose, "Linear Newton's method updates:", solved);
                 }
@@ -240,6 +298,23 @@ namespace Circuit
         private static void LogExpressions(ILog Log, MessageType Type, string Title, IEnumerable<Expression> Expressions)
         {
             LogList(Log, Type, Title, Expressions.Select(i => i.ToString()));
+        }
+    }
+
+    /// <summary>
+    /// Solutions x = M·b of Equations A·x + R·b == 0, where A and R only depend on parameters and M are symbols the
+    /// simulation solves for numerically when the parameters change. The linear solutions are the part of M·b that
+    /// is fixed within a sample.
+    /// </summary>
+    public class ParameterSolutions : LinearSolutions
+    {
+        public IEnumerable<Arrow> Block { get; }
+        public IEnumerable<LinearCombination> Equations { get; }
+
+        public ParameterSolutions(IEnumerable<Arrow> Solutions, IEnumerable<Arrow> Block, IEnumerable<LinearCombination> Equations) : base(Solutions)
+        {
+            this.Block = Block.ToList();
+            this.Equations = Equations.ToList();
         }
     }
 }
