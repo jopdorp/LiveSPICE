@@ -280,7 +280,8 @@ namespace Circuit
             }
 
             // Parameters are fixed for the whole call, so compute anything that depends only on them once here instead of per sample.
-            ArgumentSubexpressions hoist = new ArgumentSubexpressions(arguments);
+            IEnumerable<Expression> blockSymbols = Solution.Solutions.OfType<ParameterSolutions>().SelectMany(S => S.Block).SelectMany(i => ((LinearCombination)i.Right).Select(j => j.Value));
+            ArgumentSubexpressions hoist = new ArgumentSubexpressions(arguments.Concat(blockSymbols));
             foreach (SolutionSet ss in Solution.Solutions)
             {
                 if (ss is LinearSolutions S)
