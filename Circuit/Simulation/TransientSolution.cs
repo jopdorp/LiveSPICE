@@ -223,10 +223,12 @@ namespace Circuit
                         List<Expression> b = A.SelectMany(i => i.Select(k => k.Key)).Distinct().Except(x).ToList();
 
                         // M only needs the structural nonzeros of A⁻¹·R, solve for them with random values to avoid accidental cancellation.
+                        // Entries at rounding level of the largest are structural cancellations, some rows are only that.
                         Random random = new Random(0);
                         double[][] S = A.Select(i => x.Concat(b).Select(j => i[j].EqualsZero() ? 0 : 1 + random.NextDouble()).ToArray()).ToArray();
                         Simulation.Solve(S, x.Count, x.Count + b.Count);
-                        List<Arrow> Mb = x.Select((j, r) => Arrow.New(j, LinearCombination.New(b.Where((k, c) => S[r][x.Count + c] != 0)
+                        double cutoff = 1e-12 * S.SelectMany(i => i.Skip(x.Count)).DefaultIfEmpty().Max(Math.Abs);
+                        List<Arrow> Mb = x.Select((j, r) => Arrow.New(j, LinearCombination.New(b.Where((k, c) => Math.Abs(S[r][x.Count + c]) > cutoff)
                             .Select(k => new KeyValuePair<Expression, Expression>(k, Variable.New("M" + solutions.Count + "_" + r + "_" + b.IndexOf(k))))))).ToList();
 
                         // The part of M·b that is fixed within a sample is computed once, before the Newton iterations.
