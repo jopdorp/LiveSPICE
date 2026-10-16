@@ -171,8 +171,8 @@ static void read_control(LiveSpiceGeneric* self, const LV2_Atom_Object* object)
         i++;
     if (i == MAX_CONTROLS)
         return;
-    if (i == self->control_count++)
-        snprintf(self->controls[i].name, sizeof(self->controls[i].name), "%s", (const char*)LV2_ATOM_BODY_CONST(name));
+    if (i == self->control_count)
+        snprintf(self->controls[self->control_count++].name, sizeof(self->controls[i].name), "%s", (const char*)LV2_ATOM_BODY_CONST(name));
     self->controls[i].value = ((const LV2_Atom_Double*)value)->body;
     self->controls[i].dirty = true;
 }
@@ -268,7 +268,7 @@ static void write_notify(LiveSpiceGeneric* self)
     lv2_atom_forge_sequence_head(&self->forge, &frame, 0);
     if (self->notify_pending) {
         lv2_atom_forge_frame_time(&self->forge, 0);
-        lv2_atom_forge_path(&self->forge, self->pending_path, (uint32_t)strlen(self->pending_path) + 1);
+        lv2_atom_forge_path(&self->forge, self->pending_path, (uint32_t)strlen(self->pending_path));
         for (int i = 0; i < self->control_count; i++) {
             lv2_atom_forge_frame_time(&self->forge, 0);
             write_control(self, &self->forge, &self->controls[i]);
