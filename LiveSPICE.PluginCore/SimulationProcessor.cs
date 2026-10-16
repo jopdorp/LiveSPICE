@@ -226,21 +226,17 @@ public class SimulationProcessor
                 if (circuit == null)
                     return;
 
-                TransientSolution solution = AudioSimulationFactory.Solve(circuit, sampleRate, oversample);
+                Simulation next = AudioSimulationFactory.Create(circuit, sampleRate, oversample, iterations);
+                next.Compile();
                 lock (sync)
                 {
                     if (id <= clock)
                         return;
 
-                    if (rebuild || simulation == null)
-                    {
-                        simulation = AudioSimulationFactory.Create(circuit, solution, oversample, iterations);
-                    }
-                    else
-                    {
-                        simulation.Solution = solution;
-                    }
+                    if (!rebuild && simulation != null)
+                        next.CopyStateFrom(simulation);
 
+                    simulation = next;
                     clock = id;
                 }
             }
