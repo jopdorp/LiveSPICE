@@ -195,17 +195,6 @@ namespace Circuit
                 _process = DefineProcess();
         }
 
-        /// <summary>
-        /// Continue from the state of another simulation of the same circuit.
-        /// </summary>
-        public void CopyStateFrom(Simulation Other)
-        {
-            n = Other.n;
-            foreach (KeyValuePair<Expression, GlobalExpr<double>> i in globals)
-                if (Other.globals.TryGetValue(i.Key, out GlobalExpr<double> other))
-                    i.Value.Value = other.Value;
-        }
-
         private Action<int, double, double[][], double[][], double[]> _process;
         // Force rebuilding of the process function.
         private void InvalidateProcess()

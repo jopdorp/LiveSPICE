@@ -16,10 +16,9 @@ public class SimulationProcessor
     private int iterations = 8;
     private Circuit.Circuit? circuit;
     private Simulation? simulation;
-    private bool needUpdate;
     private bool needRebuild;
-    private int updateSamplesElapsed;
-    private int delayUpdateSamples;
+    private Analysis.Parameter[] parameters = Array.Empty<Analysis.Parameter>();
+    private double[] parameterValues = Array.Empty<double>();
     private Exception? simulationUpdateException;
     private int clock = -1;
     private int update;
@@ -50,7 +49,6 @@ public class SimulationProcessor
 
             sampleRate = value;
             needRebuild = true;
-            delayUpdateSamples = (int)(sampleRate * .1);
         }
     }
 
@@ -108,7 +106,7 @@ public class SimulationProcessor
 
         if (simulation == null && needRebuild && circuit != null)
         {
-            UpdateSimulation(needRebuild);
+            UpdateSimulation();
             needRebuild = false;
         }
 
@@ -122,13 +120,6 @@ public class SimulationProcessor
         {
             foreach (IComponentWrapper component in InteractiveComponents)
             {
-                if (component.NeedUpdate)
-                {
-                    needUpdate = true;
-                    component.NeedUpdate = false;
-                    updateSamplesElapsed = 0;
-                }
-
                 if (component.NeedRebuild)
                 {
                     needRebuild = true;
@@ -136,21 +127,16 @@ public class SimulationProcessor
                 }
             }
 
-            if (needUpdate || needRebuild)
+            if (needRebuild)
             {
-                if (needRebuild || updateSamplesElapsed > delayUpdateSamples)
-                {
-                    UpdateSimulation(needRebuild);
-                    needRebuild = false;
-                    needUpdate = false;
-                }
-                else
-                {
-                    updateSamplesElapsed += numSamples;
-                }
+                UpdateSimulation();
+                needRebuild = false;
             }
 
-            simulation.Run(numSamples, audioInputs, audioOutputs);
+            for (int i = 0; i < parameters.Length; i++)
+                parameterValues[i] = parameters[i].Value;
+
+            simulation.Run(numSamples, audioInputs, audioOutputs, parameterValues);
         }
     }
 
@@ -216,7 +202,7 @@ public class SimulationProcessor
         }
     }
 
-    private void UpdateSimulation(bool rebuild)
+    private void UpdateSimulation()
     {
         int id = Interlocked.Increment(ref update);
         new Task(() =>
@@ -226,17 +212,17 @@ public class SimulationProcessor
                 if (circuit == null)
                     return;
 
-                Simulation next = AudioSimulationFactory.Create(circuit, sampleRate, oversample, iterations);
+                Analysis analysis = circuit.Analyze();
+                Simulation next = AudioSimulationFactory.Create(circuit, analysis, sampleRate, oversample, iterations);
                 next.Compile();
                 lock (sync)
                 {
                     if (id <= clock)
                         return;
 
-                    if (!rebuild && simulation != null)
-                        next.CopyStateFrom(simulation);
-
                     simulation = next;
+                    parameters = analysis.Parameters.ToArray();
+                    parameterValues = new double[parameters.Length];
                     clock = id;
                 }
             }

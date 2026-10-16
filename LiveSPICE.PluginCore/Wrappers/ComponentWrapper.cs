@@ -12,8 +12,6 @@ public abstract class ComponentWrapper<T> : IComponentWrapper
 
     public string Name { get; }
 
-    public bool NeedUpdate { get; set; }
-
     public bool NeedRebuild { get; set; }
 
     protected List<T> Sections { get; } = new List<T>();
