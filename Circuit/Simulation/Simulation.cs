@@ -266,6 +266,19 @@ namespace Circuit
             foreach (KeyValuePair<Expression, LinqExpr> i in parameters)
                 code.DeclInit(i.Key, i.Value);
 
+            // Solve A·M = -R for the parameter-dependent linear solutions once per block.
+            foreach (ParameterSolutions S in Solution.Solutions.OfType<ParameterSolutions>())
+            {
+                LinearCombination[] m = S.Block.Select(i => (LinearCombination)i.Right).ToArray();
+                Expression[] b = m.SelectMany(i => i.Select(j => j.Key)).Distinct().ToArray();
+                LinqExpr Ab = code.ReDeclInit<double[][]>("Ab", LinqExpr.NewArrayInit(typeof(double[]),
+                    S.Equations.Select(i => LinqExpr.NewArrayInit(typeof(double), S.Block.Select(j => j.Left).Concat(b).Select(j => code.Compile(i[j]))))));
+                code.Add(LinqExpr.Call(GetMethod<Simulation>(nameof(Solve), Ab.Type, typeof(int), typeof(int)), Ab, LinqExpr.Constant(m.Length), LinqExpr.Constant(m.Length + b.Length)));
+                for (int i = 0; i < m.Length; ++i)
+                    foreach (KeyValuePair<Expression, Expression> j in m[i])
+                        code.DeclInit(j.Value, LinqExpr.Negate(LinqExpr.ArrayAccess(LinqExpr.ArrayAccess(Ab, LinqExpr.Constant(i)), LinqExpr.Constant(m.Length + Array.IndexOf(b, j.Key)))));
+            }
+
             // Parameters are fixed for the whole call, so compute anything that depends only on them once here instead of per sample.
             ArgumentSubexpressions hoist = new ArgumentSubexpressions(arguments);
             foreach (SolutionSet ss in Solution.Solutions)
