@@ -4,18 +4,19 @@ This is the Linux-native plugin target for hosts such as Carla, Ardour, and REAP
 
 The bundle currently contains two native LV2 plugins:
 
-- `LiveSPICE Generic`: a generic LiveSPICE LV2 shell with mono input/output, `schematicPath` state support, and a GTK3 `Load Schematic` UI styled after the Windows VST metal panel. Loading a `.schx` updates the UI with discovered potentiometer and switch controls, and `Clear` resets the loaded schematic and control panel. It currently passes audio through until the managed LiveSPICE simulation engine is bridged into the native LV2 runtime.
+- `LiveSPICE Generic`: a generic LiveSPICE LV2 shell with mono input/output, `schematicPath` state support, and a GTK3 `Load Schematic` UI styled after the Windows VST metal panel. Loading a `.schx` updates the UI with discovered potentiometer and switch controls, and `Clear` resets the loaded schematic and control panel. It runs the real LiveSPICE simulation by hosting the .NET runtime in-process, building the circuit on the LV2 worker thread and passing audio through until it is ready.
 - `LiveSPICE MXR Phase 90`: a mono MXR Phase 90-style phaser with `Speed` and `Trimmer` controls.
 
 Both build to real Linux ELF shared objects, unlike the AudioPlugSharp `.vst3` bridge that is Windows-only.
 
-It also exposes an LV2 state interface with a `https://livespice.org/ns/plugin#schematicPath` property. That is the Linux-native state hook needed for the generic LiveSPICE model where hosts save/restore the selected `.schx` path, matching the Windows plugin's program-state design. The current DSP is still the built-in phaser; wiring arbitrary `.schx` simulation into the native plugin is the next engine bridge step.
-
+It also exposes an LV2 state interface with a `https://livespice.org/ns/plugin#schematicPath` property. That is the Linux-native state hook needed for the generic LiveSPICE model where hosts save/restore the selected `.schx` path, matching the Windows plugin's program-state design.
 ## Build
 
 ```bash
 make -C Native/LiveSPICE.LV2 clean all
 ```
+
+This needs the .NET 8 SDK: `all` publishes `LiveSPICE.NativeBridge` into `managed/` inside the bundle and links `libnethost` from the SDK. `make test-sim` runs the MXR Distortion + example through the generic plugin and prints input and output levels.
 
 ## Test Discovery
 

@@ -6,6 +6,7 @@
 @prefix state: <http://lv2plug.in/ns/ext/state#> .
 @prefix ui: <http://lv2plug.in/ns/extensions/ui#> .
 @prefix urid: <http://lv2plug.in/ns/ext/urid#> .
+@prefix work: <http://lv2plug.in/ns/ext/worker#> .
 @prefix livespice: <https://livespice.org/ns/plugin#> .
 
 <https://livespice.org/plugins/generic>
@@ -13,12 +14,12 @@
     doap:name "LiveSPICE Generic" ;
     doap:license <https://opensource.org/licenses/MIT> ;
     doap:maintainer [ foaf:name "LiveSPICE" ] ;
-    lv2:extensionData state:interface ;
+    lv2:extensionData state:interface , work:interface ;
     lv2:optionalFeature lv2:hardRTCapable ;
-    lv2:requiredFeature urid:map ;
+    lv2:requiredFeature urid:map , work:schedule ;
     ui:ui <https://livespice.org/plugins/generic#gtk3-ui> ;
     livespice:schematicPath "" ;
-    rdfs:comment "Generic LiveSPICE LV2 shell. It provides a GTK3 Load Schematic UI, saves/restores a .schx schematic path, and currently passes audio through until the managed LiveSPICE simulation engine is bridged into the native LV2 runtime." ;
+    rdfs:comment "Generic LiveSPICE LV2 shell. It provides a GTK3 Load Schematic UI, saves/restores a .schx schematic path, and runs the LiveSPICE simulation of the loaded schematic through the .NET runtime, passing audio through until it is ready." ;
     lv2:port [
         a lv2:InputPort , lv2:AudioPort ;
         lv2:index 0 ;
@@ -32,7 +33,7 @@
     ] , [
         a lv2:InputPort , atom:AtomPort ;
         atom:bufferType atom:Sequence ;
-        atom:supports atom:Path ;
+        atom:supports atom:Path , atom:Object ;
         lv2:index 2 ;
         lv2:symbol "control_events" ;
         lv2:name "Control Events"
