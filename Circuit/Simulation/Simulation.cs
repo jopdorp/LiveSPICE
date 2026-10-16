@@ -464,7 +464,7 @@ namespace Circuit
 
             public ArgumentSubexpressions(IEnumerable<Expression> Arguments) { arguments = new HashSet<Expression>(Arguments); }
 
-            public void Visit(IEnumerable<Expression> E) { All(E); }
+            public void Visit(IEnumerable<Expression> E) { foreach (Expression i in E) if (Visit(i) && !(i is Atom)) Found.Add(i); }
 
             private bool All(IEnumerable<Expression> E)
             {
