@@ -62,7 +62,7 @@ typedef struct {
     LV2_Handle handle;
     const LV2_Worker_Interface* worker;
     float input[BLOCK], output[BLOCK];
-    union { LV2_Atom_Sequence sequence; unsigned char bytes[1024]; } events;
+    union { LV2_Atom_Sequence sequence; unsigned char bytes[1024]; } events, notify;
     long frame;
 } Plugin;
 
@@ -78,6 +78,7 @@ static int run_block(Plugin* p)
 {
     for (int i = 0; i < BLOCK; i++, p->frame++)
         p->input[i] = 0.25f * (float)sin(2.0 * M_PI * 440.0 * p->frame / RATE);
+    p->notify.sequence.atom.size = sizeof(p->notify) - sizeof(LV2_Atom);
     p->descriptor->run(p->handle, BLOCK);
     p->events.sequence.atom.size = sizeof(LV2_Atom_Sequence_Body);
     for (uint32_t i = 0; i < jobs.count; i++)
@@ -105,6 +106,7 @@ static void open_plugin(Plugin* p, const char* bundle, const LV2_Feature* const*
     p->descriptor->connect_port(p->handle, 0, p->input);
     p->descriptor->connect_port(p->handle, 1, p->output);
     p->descriptor->connect_port(p->handle, 2, &p->events);
+    p->descriptor->connect_port(p->handle, 3, &p->notify);
     p->descriptor->activate(p->handle);
 
     double start = now();

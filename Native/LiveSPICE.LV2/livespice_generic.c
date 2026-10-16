@@ -13,9 +13,10 @@ struct hostfxr_dotnet_environment_info;
 #include <hostfxr.h>
 #include <nethost.h>
 
-#include <lv2/atom/atom.h>
+#include <lv2/atom/forge.h>
 #include <lv2/atom/util.h>
 #include <lv2/core/lv2.h>
+#include <lv2/patch/patch.h>
 #include <lv2/state/state.h>
 #include <lv2/urid/urid.h>
 #include <lv2/worker/worker.h>
@@ -25,7 +26,9 @@ struct hostfxr_dotnet_environment_info;
 #define LIVESPICE__control "https://livespice.org/ns/plugin#control"
 #define LIVESPICE__controlName "https://livespice.org/ns/plugin#controlName"
 #define LIVESPICE__controlValue "https://livespice.org/ns/plugin#controlValue"
+#define LIVESPICE__controls "https://livespice.org/ns/plugin#controls"
 #define MAX_BLOCK 4096
+#define MAX_CONTROLS 32
 
 static struct {
     int (CORECLR_DELEGATE_CALLTYPE* create)(const char* path, int sample_rate, int max_block, void** handle);
@@ -90,30 +93,40 @@ typedef struct {
 typedef enum {
     PORT_INPUT = 0,
     PORT_OUTPUT = 1,
-    PORT_CONTROL_EVENTS = 2
+    PORT_CONTROL_EVENTS = 2,
+    PORT_NOTIFY = 3
 } PortIndex;
+
+typedef struct {
+    char name[128];
+    double value;
+    bool dirty;
+} Control;
 
 typedef struct {
     const float* input;
     float* output;
     const LV2_Atom_Sequence* control_events;
+    LV2_Atom_Sequence* notify;
     char schematic_path[4096];
     char pending_path[4096];
     bool load_pending;
+    bool notify_pending;
+    Control controls[MAX_CONTROLS];
+    int control_count;
     char* bundle_path;
     double sample_rate;
     void* engine;
     void* retired;
     LV2_URID_Map* map;
     LV2_Worker_Schedule* schedule;
-    LV2_URID atom_path;
-    LV2_URID atom_string;
-    LV2_URID atom_object;
-    LV2_URID atom_double;
+    LV2_Atom_Forge forge;
     LV2_URID schematic_path_key;
+    LV2_URID controls_key;
     LV2_URID control;
     LV2_URID control_name;
     LV2_URID control_value;
+    LV2_URID patch_get;
 } LiveSpiceGeneric;
 
 static void map_features(LiveSpiceGeneric* self, const LV2_Feature* const* features)
@@ -126,14 +139,13 @@ static void map_features(LiveSpiceGeneric* self, const LV2_Feature* const* featu
     }
 
     if (self->map != NULL) {
-        self->atom_path = self->map->map(self->map->handle, LV2_ATOM__Path);
-        self->atom_string = self->map->map(self->map->handle, LV2_ATOM__String);
-        self->atom_object = self->map->map(self->map->handle, LV2_ATOM__Object);
-        self->atom_double = self->map->map(self->map->handle, LV2_ATOM__Double);
+        lv2_atom_forge_init(&self->forge, self->map);
         self->schematic_path_key = self->map->map(self->map->handle, LIVESPICE__schematicPath);
+        self->controls_key = self->map->map(self->map->handle, LIVESPICE__controls);
         self->control = self->map->map(self->map->handle, LIVESPICE__control);
         self->control_name = self->map->map(self->map->handle, LIVESPICE__controlName);
         self->control_value = self->map->map(self->map->handle, LIVESPICE__controlValue);
+        self->patch_get = self->map->map(self->map->handle, LV2_PATCH__Get);
     }
 }
 
@@ -143,6 +155,37 @@ static void set_schematic_path(LiveSpiceGeneric* self, const char* path, uint32_
     memcpy(self->pending_path, path, length);
     self->pending_path[length] = '\0';
     self->load_pending = true;
+    self->control_count = 0;
+}
+
+static void read_control(LiveSpiceGeneric* self, const LV2_Atom_Object* object)
+{
+    const LV2_Atom* name = NULL;
+    const LV2_Atom* value = NULL;
+    lv2_atom_object_get(object, self->control_name, &name, self->control_value, &value, 0);
+    if (name == NULL || name->type != self->forge.String || value == NULL || value->type != self->forge.Double)
+        return;
+
+    int i = 0;
+    while (i < self->control_count && strncmp(self->controls[i].name, LV2_ATOM_BODY_CONST(name), sizeof(self->controls[i].name) - 1) != 0)
+        i++;
+    if (i == MAX_CONTROLS)
+        return;
+    if (i == self->control_count++)
+        snprintf(self->controls[i].name, sizeof(self->controls[i].name), "%s", (const char*)LV2_ATOM_BODY_CONST(name));
+    self->controls[i].value = ((const LV2_Atom_Double*)value)->body;
+    self->controls[i].dirty = true;
+}
+
+static void write_control(LiveSpiceGeneric* self, LV2_Atom_Forge* forge, const Control* control)
+{
+    LV2_Atom_Forge_Frame frame;
+    lv2_atom_forge_object(forge, &frame, 0, self->control);
+    lv2_atom_forge_key(forge, self->control_name);
+    lv2_atom_forge_string(forge, control->name, (uint32_t)strlen(control->name));
+    lv2_atom_forge_key(forge, self->control_value);
+    lv2_atom_forge_double(forge, control->value);
+    lv2_atom_forge_pop(forge, &frame);
 }
 
 static bool schedule_job(LiveSpiceGeneric* self, JobKind kind, void* engine, double value, const char* text)
@@ -164,15 +207,11 @@ static void read_control_events(LiveSpiceGeneric* self)
 
     LV2_ATOM_SEQUENCE_FOREACH(self->control_events, event) {
         const LV2_Atom_Object* object = (const LV2_Atom_Object*)&event->body;
-        if (event->body.type == self->atom_object && object->body.otype == self->control) {
-            const LV2_Atom* name = NULL;
-            const LV2_Atom* value = NULL;
-            lv2_atom_object_get(object, self->control_name, &name, self->control_value, &value, 0);
-            if (self->engine != NULL && name != NULL && name->type == self->atom_string && value != NULL && value->type == self->atom_double)
-                schedule_job(self, JOB_CONTROL, self->engine, ((const LV2_Atom_Double*)value)->body, (const char*)LV2_ATOM_BODY_CONST(name));
-            continue;
-        }
-        if (event->body.type != self->atom_path && event->body.type != self->atom_string)
+        if (event->body.type == self->forge.Object && object->body.otype == self->control)
+            read_control(self, object);
+        if (event->body.type == self->forge.Object && object->body.otype == self->patch_get)
+            self->notify_pending = true;
+        if (event->body.type != self->forge.Path && event->body.type != self->forge.String)
             continue;
 
         const char* path = (const char*)LV2_ATOM_BODY(&event->body);
@@ -211,6 +250,9 @@ static void connect_port(LV2_Handle instance, uint32_t port, void* data)
     case PORT_CONTROL_EVENTS:
         self->control_events = (const LV2_Atom_Sequence*)data;
         break;
+    case PORT_NOTIFY:
+        self->notify = (LV2_Atom_Sequence*)data;
+        break;
     }
 }
 
@@ -219,12 +261,34 @@ static void activate(LV2_Handle instance)
     (void)instance;
 }
 
+static void write_notify(LiveSpiceGeneric* self)
+{
+    lv2_atom_forge_set_buffer(&self->forge, (uint8_t*)self->notify, self->notify->atom.size);
+    LV2_Atom_Forge_Frame frame;
+    lv2_atom_forge_sequence_head(&self->forge, &frame, 0);
+    if (self->notify_pending) {
+        lv2_atom_forge_frame_time(&self->forge, 0);
+        lv2_atom_forge_path(&self->forge, self->pending_path, (uint32_t)strlen(self->pending_path) + 1);
+        for (int i = 0; i < self->control_count; i++) {
+            lv2_atom_forge_frame_time(&self->forge, 0);
+            write_control(self, &self->forge, &self->controls[i]);
+        }
+        self->notify_pending = false;
+    }
+    lv2_atom_forge_pop(&self->forge, &frame);
+}
+
 static void run(LV2_Handle instance, uint32_t sample_count)
 {
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
     read_control_events(self);
+    write_notify(self);
     if (self->load_pending && schedule_job(self, JOB_LOAD, NULL, 0, self->pending_path))
         self->load_pending = false;
+
+    for (int i = 0; self->engine != NULL && i < self->control_count; i++)
+        if (self->controls[i].dirty && schedule_job(self, JOB_CONTROL, self->engine, self->controls[i].value, self->controls[i].name))
+            self->controls[i].dirty = false;
 
     if (self->retired != NULL && schedule_job(self, JOB_DESTROY, self->retired, 0, ""))
         self->retired = NULL;
@@ -270,6 +334,8 @@ static LV2_Worker_Status work_response(LV2_Handle instance, uint32_t size, const
     self->retired = self->engine;
     self->engine = loaded->engine;
     memcpy(self->schematic_path, loaded->text, size - offsetof(Job, text));
+    for (int i = 0; i < self->control_count; i++)
+        self->controls[i].dirty = true;
     return LV2_WORKER_SUCCESS;
 }
 
@@ -295,16 +361,22 @@ static LV2_State_Status save_state(LV2_Handle instance, LV2_State_Store_Function
     (void)features;
 
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
-    if (self->schematic_path_key == 0 || self->atom_path == 0 || self->schematic_path[0] == '\0')
+    if (self->schematic_path[0] == '\0')
         return LV2_STATE_SUCCESS;
 
-    return store(
-        handle,
-        self->schematic_path_key,
-        self->schematic_path,
-        strlen(self->schematic_path) + 1,
-        self->atom_path,
-        LV2_STATE_IS_POD);
+    LV2_State_Status status = store(handle, self->schematic_path_key, self->schematic_path, strlen(self->schematic_path) + 1, self->forge.Path, LV2_STATE_IS_POD);
+    uint8_t buffer[MAX_CONTROLS * 256];
+    LV2_Atom_Forge forge = self->forge;
+    lv2_atom_forge_set_buffer(&forge, buffer, sizeof(buffer));
+    LV2_Atom_Forge_Frame frame;
+    lv2_atom_forge_tuple(&forge, &frame);
+    for (int i = 0; i < self->control_count; i++)
+        write_control(self, &forge, &self->controls[i]);
+    lv2_atom_forge_pop(&forge, &frame);
+    const LV2_Atom* tuple = (const LV2_Atom*)buffer;
+    if (status == LV2_STATE_SUCCESS && self->control_count > 0)
+        status = store(handle, self->controls_key, LV2_ATOM_BODY_CONST(tuple), tuple->size, self->forge.Tuple, LV2_STATE_IS_POD);
+    return status;
 }
 
 static LV2_State_Status restore_state(LV2_Handle instance, LV2_State_Retrieve_Function retrieve, LV2_State_Handle handle, uint32_t flags, const LV2_Feature* const* features)
@@ -313,19 +385,22 @@ static LV2_State_Status restore_state(LV2_Handle instance, LV2_State_Retrieve_Fu
     (void)features;
 
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
-    if (self->schematic_path_key == 0)
-        return LV2_STATE_ERR_NO_FEATURE;
-
     size_t size = 0;
     uint32_t type = 0;
     uint32_t value_flags = 0;
     const void* value = retrieve(handle, self->schematic_path_key, &size, &type, &value_flags);
     if (value == NULL || size == 0)
         return LV2_STATE_SUCCESS;
-    if (type != self->atom_path)
+    if (type != self->forge.Path)
         return LV2_STATE_ERR_BAD_TYPE;
 
     set_schematic_path(self, (const char*)value, (uint32_t)size);
+    value = retrieve(handle, self->controls_key, &size, &type, &value_flags);
+    if (value != NULL && type == self->forge.Tuple)
+        LV2_ATOM_TUPLE_BODY_FOREACH(value, size, item)
+            if (item->type == self->forge.Object && ((const LV2_Atom_Object*)item)->body.otype == self->control)
+                read_control(self, (const LV2_Atom_Object*)item);
+    self->notify_pending = true;
     return LV2_STATE_SUCCESS;
 }
 

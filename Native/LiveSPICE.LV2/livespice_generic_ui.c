@@ -8,7 +8,9 @@
 
 #include <lv2/atom/atom.h>
 #include <lv2/atom/forge.h>
+#include <lv2/atom/util.h>
 #include <lv2/core/lv2.h>
+#include <lv2/patch/patch.h>
 #include <lv2/ui/ui.h>
 #include <lv2/urid/urid.h>
 
@@ -21,7 +23,8 @@
 typedef enum {
     PORT_INPUT = 0,
     PORT_OUTPUT = 1,
-    PORT_CONTROL_EVENTS = 2
+    PORT_CONTROL_EVENTS = 2,
+    PORT_NOTIFY = 3
 } PortIndex;
 
 typedef struct {
@@ -99,6 +102,7 @@ typedef struct {
     LV2_URID control;
     LV2_URID control_name;
     LV2_URID control_value;
+    LV2_URID patch_get;
     LV2_Atom_Forge forge;
     GtkWidget* root;
     GtkWidget* path_label;
@@ -668,7 +672,7 @@ static void send_control(GtkWidget* widget, double value)
     self->write(self->controller, PORT_CONTROL_EVENTS, lv2_atom_total_size(atom), self->atom_event_transfer, atom);
 }
 
-static void set_schematic_path(LiveSpiceGenericUi* self, const char* path)
+static void show_schematic_path(LiveSpiceGenericUi* self, const char* path)
 {
     char* copy = strdup(path);
     if (copy == NULL)
@@ -678,7 +682,36 @@ static void set_schematic_path(LiveSpiceGenericUi* self, const char* path)
     self->schematic_path = copy;
     set_label_path(self, copy);
     rebuild_control_panel(self, copy);
-    send_schematic_path(self, copy);
+}
+
+static void set_schematic_path(LiveSpiceGenericUi* self, const char* path)
+{
+    show_schematic_path(self, path);
+    send_schematic_path(self, path);
+}
+
+static void show_control_value(LiveSpiceGenericUi* self, const char* name, double value)
+{
+    GList* cards = gtk_container_get_children(GTK_CONTAINER(self->controls_box));
+    for (GList* card = cards; card != NULL; card = card->next) {
+        GList* widgets = GTK_IS_CONTAINER(card->data) ? gtk_container_get_children(GTK_CONTAINER(card->data)) : NULL;
+        for (GList* widget = widgets; widget != NULL; widget = widget->next) {
+            const char* widget_name = (const char*)g_object_get_data(G_OBJECT(widget->data), "livespice-name");
+            KnobControl* knob = (KnobControl*)g_object_get_data(G_OBJECT(widget->data), "livespice-knob");
+            if (widget_name == NULL || strcmp(widget_name, name) != 0)
+                continue;
+            if (knob != NULL) {
+                knob->value = clamp_unit(value);
+                gtk_widget_queue_draw(knob->area);
+            } else {
+                g_signal_handlers_block_by_func(widget->data, switch_changed, NULL);
+                gtk_combo_box_set_active(GTK_COMBO_BOX(widget->data), (int)value);
+                g_signal_handlers_unblock_by_func(widget->data, switch_changed, NULL);
+            }
+        }
+        g_list_free(widgets);
+    }
+    g_list_free(cards);
 }
 
 static void load_schematic_clicked(GtkButton* button, gpointer data)
@@ -750,6 +783,7 @@ static LV2UI_Handle instantiate(
         self->control = self->map->map(self->map->handle, LIVESPICE__control);
         self->control_name = self->map->map(self->map->handle, LIVESPICE__controlName);
         self->control_value = self->map->map(self->map->handle, LIVESPICE__controlValue);
+        self->patch_get = self->map->map(self->map->handle, LV2_PATCH__Get);
         lv2_atom_forge_init(&self->forge, self->map);
     }
 
@@ -794,6 +828,15 @@ static LV2UI_Handle instantiate(
 
     gtk_widget_show_all(self->root);
     *widget = self->root;
+
+    if (self->map != NULL) {
+        uint8_t buffer[64];
+        lv2_atom_forge_set_buffer(&self->forge, buffer, sizeof(buffer));
+        LV2_Atom_Forge_Frame frame;
+        lv2_atom_forge_object(&self->forge, &frame, 0, self->patch_get);
+        lv2_atom_forge_pop(&self->forge, &frame);
+        self->write(self->controller, PORT_CONTROL_EVENTS, lv2_atom_total_size((LV2_Atom*)buffer), self->atom_event_transfer, buffer);
+    }
     return (LV2UI_Handle)self;
 }
 
@@ -806,11 +849,21 @@ static void cleanup(LV2UI_Handle ui)
 
 static void port_event(LV2UI_Handle ui, uint32_t port_index, uint32_t buffer_size, uint32_t format, const void* buffer)
 {
-    (void)ui;
-    (void)port_index;
     (void)buffer_size;
-    (void)format;
-    (void)buffer;
+    LiveSpiceGenericUi* self = (LiveSpiceGenericUi*)ui;
+    const LV2_Atom* atom = (const LV2_Atom*)buffer;
+    if (port_index != PORT_NOTIFY || format != self->atom_event_transfer)
+        return;
+    if (atom->type == self->forge.Path)
+        show_schematic_path(self, (const char*)LV2_ATOM_BODY_CONST(atom));
+    if (atom->type != self->forge.Object || ((const LV2_Atom_Object*)atom)->body.otype != self->control)
+        return;
+
+    const LV2_Atom* name = NULL;
+    const LV2_Atom* value = NULL;
+    lv2_atom_object_get((const LV2_Atom_Object*)atom, self->control_name, &name, self->control_value, &value, 0);
+    if (name != NULL && name->type == self->forge.String && value != NULL && value->type == self->forge.Double)
+        show_control_value(self, (const char*)LV2_ATOM_BODY_CONST(name), ((const LV2_Atom_Double*)value)->body);
 }
 
 static const void* extension_data(const char* uri)
