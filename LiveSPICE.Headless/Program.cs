@@ -24,7 +24,9 @@ namespace Circuit.Headless
 
                 Schematic schematic = Schematic.Load(options.SchematicPath);
                 Circuit circuit = schematic.Build();
-                Simulation simulation = AudioSimulationFactory.Create(circuit, options.SampleRate, options.Oversample, options.Iterations);
+                Analysis analysis = circuit.Analyze();
+                Simulation simulation = AudioSimulationFactory.Create(circuit, analysis, options.SampleRate, options.Oversample, options.Iterations);
+                double[] parameters = analysis.Parameters.Select(i => i.Value).ToArray();
 
                 double[] input = new double[options.BatchSize];
                 double[] output = new double[options.BatchSize];
@@ -43,7 +45,7 @@ namespace Circuit.Headless
                     FillInput(input, count, generated, options, inputWave);
                     Array.Clear(output, 0, count);
 
-                    simulation.Run(count, new[] { input }, new[] { output });
+                    simulation.Run(count, new[] { input }, new[] { output }, parameters);
 
                     for (int i = 0; i < count; i++)
                     {

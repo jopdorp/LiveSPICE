@@ -13,13 +13,8 @@ public class PotWrapper : ComponentWrapper<IPotControl>
         get => Sections[0].PotValue;
         set
         {
-            if (Sections[0].PotValue == value)
-                return;
-
             foreach (IPotControl section in Sections)
                 section.PotValue = value;
-
-            NeedUpdate = true;
         }
     }
 }

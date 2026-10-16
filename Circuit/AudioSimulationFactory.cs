@@ -6,29 +6,23 @@ namespace Circuit
 {
     public static class AudioSimulationFactory
     {
-        public static TransientSolution Solve(Circuit circuit, double sampleRate, int oversample)
+        public static TransientSolution Solve(Analysis analysis, double sampleRate, int oversample)
         {
-            if (circuit == null)
-                throw new ArgumentNullException(nameof(circuit));
+            if (analysis == null)
+                throw new ArgumentNullException(nameof(analysis));
             if (sampleRate <= 0)
                 throw new ArgumentOutOfRangeException(nameof(sampleRate));
             if (oversample <= 0)
                 throw new ArgumentOutOfRangeException(nameof(oversample));
 
-            return TransientSolution.Solve(circuit.Analyze(), (Real)1 / (sampleRate * oversample));
+            return TransientSolution.Solve(analysis, (Real)1 / (sampleRate * oversample));
         }
 
-        public static Simulation Create(Circuit circuit, double sampleRate, int oversample, int iterations)
-        {
-            return Create(circuit, Solve(circuit, sampleRate, oversample), oversample, iterations);
-        }
-
-        public static Simulation Create(Circuit circuit, TransientSolution solution, int oversample, int iterations)
+        public static Simulation Create(Circuit circuit, Analysis analysis, double sampleRate, int oversample, int iterations)
         {
             if (circuit == null)
                 throw new ArgumentNullException(nameof(circuit));
-            if (solution == null)
-                throw new ArgumentNullException(nameof(solution));
+            TransientSolution solution = Solve(analysis, sampleRate, oversample);
             if (oversample <= 0)
                 throw new ArgumentOutOfRangeException(nameof(oversample));
             if (iterations <= 0)
@@ -50,7 +44,8 @@ namespace Circuit
                 Oversample = oversample,
                 Iterations = iterations,
                 Input = new[] { inputExpression },
-                Output = new[] { outputExpression }
+                Output = new[] { outputExpression },
+                Arguments = analysis.Parameters.Select(i => i.Expression)
             };
         }
     }

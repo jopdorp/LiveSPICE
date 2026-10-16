@@ -6,6 +6,7 @@ using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using Util;
+using static Circuit.Analysis;
 using LinqExpr = System.Linq.Expressions.Expression;
 using ParamExpr = System.Linq.Expressions.ParameterExpression;
 
@@ -98,6 +99,12 @@ namespace Circuit
         /// </summary>
         public IEnumerable<Expression> Output { get { return output; } set { output = value.ToArray(); InvalidateProcess(); } }
 
+        private Expression[] arguments = new Expression[] { };
+        /// <summary>
+        /// Expressions for parameters.
+        /// </summary>
+        public IEnumerable<Expression> Arguments { get { return arguments; } set { arguments = value.ToArray(); InvalidateProcess(); } }
+
         // Stores any global state in the simulation (previous state values, mostly).
         private Dictionary<Expression, GlobalExpr<double>> globals = new Dictionary<Expression, GlobalExpr<double>>();
         // Add a new global and set it to 0 if it didn't already exist.
@@ -153,7 +160,8 @@ namespace Circuit
         /// <param name="N">Number of samples to process.</param>
         /// <param name="Input">Buffers that describe the input samples.</param>
         /// <param name="Output">Buffers to receive output samples.</param>
-        public void Run(int N, IEnumerable<double[]> Input, IEnumerable<double[]> Output)
+        /// <param name="Parameters">Scalar values for the arguments.</param>
+        public void Run(int N, IEnumerable<double[]> Input, IEnumerable<double[]> Output, IEnumerable<double> Parameters)
         {
             Compile();
 
@@ -161,7 +169,7 @@ namespace Circuit
             {
                 try
                 {
-                    _process(N, n*TimeStep, Input.AsArray(), Output.AsArray());
+                    _process(N, n*TimeStep, Input.AsArray(), Output.AsArray(), Parameters.AsArray());
                     n += N;
                 }
                 catch (TargetInvocationException Ex)
@@ -174,9 +182,9 @@ namespace Circuit
                 throw new SimulationDiverged("Simulation diverged near t = " + Quantity.ToString(Time, Units.s) + " + " + Ex.At, n + Ex.At);
             }
         }
-        public void Run(int N, IEnumerable<double[]> Output) { Run(N, new double[][] { }, Output); }
-        public void Run(double[] Input, IEnumerable<double[]> Output) { Run(Input.Length, new[] { Input }, Output); }
-        public void Run(double[] Input, double[] Output) { Run(Input.Length, new[] { Input }, new[] { Output }); }
+        public void Run(int N, IEnumerable<double[]> Output, IEnumerable<double> Parameters) { Run(N, new double[][] { }, Output, Parameters); }
+        public void Run(double[] Input, IEnumerable<double[]> Output, IEnumerable<double> Parameters) { Run(Input.Length, new[] { Input }, Output, Parameters); }
+        public void Run(double[] Input, double[] Output, IEnumerable<double> Parameters) { Run(Input.Length, new[] { Input }, new[] { Output }, Parameters); }
 
         /// <summary>
         /// Build the process function now instead of on the next Run.
@@ -187,18 +195,7 @@ namespace Circuit
                 _process = DefineProcess();
         }
 
-        /// <summary>
-        /// Continue from the state of another simulation of the same circuit.
-        /// </summary>
-        public void CopyStateFrom(Simulation Other)
-        {
-            n = Other.n;
-            foreach (KeyValuePair<Expression, GlobalExpr<double>> i in globals)
-                if (Other.globals.TryGetValue(i.Key, out GlobalExpr<double> other))
-                    i.Value.Value = other.Value;
-        }
-
-        private Action<int, double, double[][], double[][]> _process;
+        private Action<int, double, double[][], double[][], double[]> _process;
         // Force rebuilding of the process function.
         private void InvalidateProcess()
         {
@@ -208,11 +205,12 @@ namespace Circuit
         // The resulting lambda processes N samples, using buffers provided for Input and Output:
         //  void Process(int N, double t0, double T, double[] Input0 ..., double[] Output0 ...)
         //  { ... }
-        private Action<int, double, double[][], double[][]> DefineProcess()
+        private Action<int, double, double[][], double[][], double[]> DefineProcess()
         {
             // Map expressions to identifiers in the syntax tree.
             var inputs = new List<KeyValuePair<Expression, LinqExpr>>();
             var outputs = new List<KeyValuePair<Expression, LinqExpr>>();
+            var parameters = new List<KeyValuePair<Expression, LinqExpr>>();
 
             // Lambda code generator.
             CodeGen code = new CodeGen();
@@ -222,6 +220,7 @@ namespace Circuit
             ParamExpr t = code.Decl(Scope.Parameter, Simulation.t);
             var ins = code.Decl<double[][]>(Scope.Parameter, "ins");
             var outs = code.Decl<double[][]>(Scope.Parameter, "outs");
+            var parms = code.Decl<double[]>(Scope.Parameter, "params");
 
             // Create buffer parameters for each input...
             for (int i = 0; i < input.Length; i++)
@@ -233,6 +232,11 @@ namespace Circuit
             for (int i = 0; i < output.Length; i++)
             {
                 outputs.Add(new KeyValuePair<Expression, LinqExpr>(output[i], LinqExpr.ArrayAccess(outs, LinqExpr.Constant(i))));
+            }
+
+            for (int i = 0; i < arguments.Length; i++)
+            {
+                parameters.Add(new KeyValuePair<Expression, LinqExpr>(arguments[i], LinqExpr.ArrayAccess(parms, LinqExpr.Constant(i))));
             }
 
             Arrow t_t1 = Arrow.New(Simulation.t, Simulation.t - Solution.TimeStep);
@@ -258,6 +262,26 @@ namespace Circuit
 
             foreach (KeyValuePair<Expression, LinqExpr> i in inputs)
                 code.DeclInit(i.Key, code[i.Key.Evaluate(t_t1)]);
+
+            foreach (KeyValuePair<Expression, LinqExpr> i in parameters)
+                code.DeclInit(i.Key, i.Value);
+
+            // Parameters are fixed for the whole call, so compute anything that depends only on them once here instead of per sample.
+            ArgumentSubexpressions hoist = new ArgumentSubexpressions(arguments);
+            foreach (SolutionSet ss in Solution.Solutions)
+            {
+                if (ss is LinearSolutions S)
+                    hoist.Visit(S.Solutions.Select(i => i.Right));
+                else if (ss is NewtonIteration NI)
+                {
+                    hoist.Visit(NI.Equations.SelectMany(i => i.Select(j => j.Value)));
+                    if (NI.KnownDeltas != null)
+                        hoist.Visit(NI.KnownDeltas.Select(i => i.Right));
+                }
+            }
+            hoist.Visit(Output);
+            foreach (Expression i in hoist.Found)
+                code.DeclInit(i, code.Compile(i));
 
             // Create arrays for linear systems.
             int M = Solution.Solutions.OfType<NewtonIteration>().Max(i => i.Equations.Count(), 0);
@@ -428,8 +452,40 @@ namespace Circuit
             foreach (KeyValuePair<Expression, GlobalExpr<double>> i in globals)
                 code.Add(LinqExpr.Assign(i.Value, code[i.Key]));
 
-            var lambda = code.Build<Action<int, double, double[][], double[][]>>();
+            var lambda = code.Build<Action<int, double, double[][], double[][], double[]>>();
             return lambda.Compile();
+        }
+
+        // Finds the largest subexpressions that depend only on the arguments.
+        private class ArgumentSubexpressions : ExpressionVisitor<bool>
+        {
+            private readonly HashSet<Expression> arguments;
+            public readonly HashSet<Expression> Found = new HashSet<Expression>();
+
+            public ArgumentSubexpressions(IEnumerable<Expression> Arguments) { arguments = new HashSet<Expression>(Arguments); }
+
+            public void Visit(IEnumerable<Expression> E) { All(E); }
+
+            private bool All(IEnumerable<Expression> E)
+            {
+                List<Expression> terms = E.ToList();
+                bool[] only = terms.Select(Visit).ToArray();
+                if (only.All(i => i))
+                    return true;
+                for (int i = 0; i < terms.Count; i++)
+                    if (only[i] && !(terms[i] is Atom))
+                        Found.Add(terms[i]);
+                return false;
+            }
+
+            protected override bool VisitConstant(Constant C) { return true; }
+            protected override bool VisitVariable(Variable V) { return arguments.Contains(V); }
+            protected override bool VisitSum(Sum A) { return All(A.Terms); }
+            protected override bool VisitProduct(Product M) { return All(M.Terms); }
+            protected override bool VisitBinary(Binary B) { return All(new[] { B.Left, B.Right }); }
+            protected override bool VisitUnary(Unary U) { return All(new[] { U.Operand }); }
+            protected override bool VisitCall(Call F) { return F.Target is UnknownFunction ? false : All(F.Arguments); }
+            protected override bool VisitUnknown(Expression E) { return false; }
         }
 
         // Solve a system of linear equations
