@@ -10,11 +10,12 @@ public sealed class SimulationAndAudioTests
     public void AudioSimulationFactoryRunsPassiveHighpass()
     {
         Circuit.Circuit circuit = Schematic.Load(FindFixture("Tests/Circuits/Passive 1stOrder Highpass RC.schx")).Build();
-        Simulation simulation = AudioSimulationFactory.Create(circuit, 48000, 4, 8);
+        Analysis analysis = circuit.Analyze();
+        Simulation simulation = AudioSimulationFactory.Create(circuit, analysis, 48000, 4, 8);
         double[] input = Enumerable.Range(0, 512).Select(i => Math.Sin(2 * Math.PI * 440 * i / 48000)).ToArray();
         double[] output = new double[input.Length];
 
-        simulation.Run(input.Length, new[] { input }, new[] { output });
+        simulation.Run(input.Length, new[] { input }, new[] { output }, analysis.Parameters.Select(i => i.Value).ToArray());
 
         Assert.Contains(output, i => Math.Abs(i) > 1e-9);
         Assert.DoesNotContain(output, double.IsNaN);
@@ -25,7 +26,7 @@ public sealed class SimulationAndAudioTests
     {
         Circuit.Circuit circuit = new Circuit.Circuit();
 
-        Assert.Throws<NotSupportedException>(() => AudioSimulationFactory.Create(circuit, 48000, 4, 8));
+        Assert.Throws<NotSupportedException>(() => AudioSimulationFactory.Create(circuit, circuit.Analyze(), 48000, 4, 8));
     }
 
     [Fact]

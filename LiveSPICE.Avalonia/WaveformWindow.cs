@@ -132,12 +132,14 @@ public sealed class WaveformWindow : Window
             Expression speakerOutput = SpeakerOutputExpression(circuit);
             ProbeCandidate[] selectedProbes = SelectedProbeCandidates().ToArray();
             Expression[] outputExpressions = new[] { speakerOutput }.Concat(selectedProbes.Select(i => i.Expression)).ToArray();
-            Simulation simulation = new Simulation(AudioSimulationFactory.Solve(circuit, sampleRate, oversampleValue))
+            Analysis analysis = circuit.Analyze();
+            Simulation simulation = new Simulation(AudioSimulationFactory.Solve(analysis, sampleRate, oversampleValue))
             {
                 Input = new[] { inputExpression },
                 Output = outputExpressions,
                 Oversample = oversampleValue,
                 Iterations = iterationValue,
+                Arguments = analysis.Parameters.Select(i => i.Expression),
             };
 
             double inGain = DbToLinear(inputGain.Value);
@@ -149,7 +151,7 @@ public sealed class WaveformWindow : Window
             double[][] outputs = outputNames.Select(_ => new double[sampleCount]).ToArray();
             FillInputBuffer(input, sampleRate, frequencyValue, inGain);
 
-            simulation.Run(input.Length, new[] { input }, outputs);
+            simulation.Run(input.Length, new[] { input }, outputs, analysis.Parameters.Select(i => i.Value).ToArray());
             for (int channel = 0; channel < outputs.Length; channel++)
             {
                 for (int i = 0; i < outputs[channel].Length; i++)

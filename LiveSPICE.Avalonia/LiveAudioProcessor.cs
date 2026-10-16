@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Circuit;
 
 namespace LiveSPICE.Avalonia;
@@ -8,6 +9,7 @@ internal sealed class LiveAudioProcessor
     private readonly object sync = new object();
     private readonly Schematic schematic;
     private Simulation? simulation;
+    private double[] parameters = Array.Empty<double>();
 
     public LiveAudioProcessor(Schematic schematic)
     {
@@ -22,7 +24,10 @@ internal sealed class LiveAudioProcessor
     {
         lock (sync)
         {
-            simulation = AudioSimulationFactory.Create(schematic.Build(), sampleRate, oversample, iterations);
+            Circuit.Circuit circuit = schematic.Build();
+            Analysis analysis = circuit.Analyze();
+            simulation = AudioSimulationFactory.Create(circuit, analysis, sampleRate, oversample, iterations);
+            parameters = analysis.Parameters.Select(i => i.Value).ToArray();
         }
     }
 
@@ -58,7 +63,7 @@ internal sealed class LiveAudioProcessor
 
         double[] outputSamples = new double[count];
         lock (sync)
-            current.Run(count, new[] { inputSamples }, new[] { outputSamples });
+            current.Run(count, new[] { inputSamples }, new[] { outputSamples }, parameters);
         for (int sample = 0; sample < count; sample++)
             outputSamples[sample] *= OutputScale;
         foreach (Audio.SampleBuffer buffer in output)
