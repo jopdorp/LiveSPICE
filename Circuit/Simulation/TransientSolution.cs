@@ -147,16 +147,24 @@ namespace Circuit
 
             // Partition the system into independent systems of equations.
             Arrow[] defaults = Analysis.Parameters.Select(i => Arrow.New(i.Expression, i.Value)).ToArray();
-            foreach (SystemOfEquations F in system.Partition())
+            foreach (SystemOfEquations P in system.Partition())
             {
-                Log.WriteLine(MessageType.Verbose, "Partition unknowns: {0}", String.Join(", ", F.Unknowns));
+                Log.WriteLine(MessageType.Verbose, "Partition unknowns: {0}", String.Join(", ", P.Unknowns));
                 // Keep parameter-dependent elimination in the numerical solve.
-                bool parameterized = F.Any(i => i.DependsOn(Analysis.Parameters.Select(p => p.Expression)));
-                List<Expression> linear = F.Unknowns.Where(j => !parameterized || F.All(i => i[j] is Constant)).ToList();
-                F.RowReduce(linear);
+                bool parameterized = P.Any(i => i.DependsOn(Analysis.Parameters.Select(p => p.Expression)));
+                // Pivot on rows without nonlinear terms where possible, a nonlinear pivot row spreads its terms into every row
+                // that is left for the numerical solve. The nonlinear rows are scaled by a symbol that scores tiny as a pivot.
+                Expression nonlinearRow = Variable.New("nonlinearRow");
+                SystemOfEquations F = new SystemOfEquations(P.Select(i => parameterized && i.Any(k => k.Value.DependsOn(P.Unknowns))
+                    ? i.Select(k => new KeyValuePair<Expression, Expression>(k.Key, Product.New(nonlinearRow, k.Value))) : i), P.Unknowns);
+                List<Expression> linear = P.Unknowns.Where(j => !parameterized || P.All(i => i[j] is Constant)).ToList();
+                F.RowReduce(linear, new[] { Arrow.New(nonlinearRow, 1e-30) });
                 List<Arrow> linearFwd = new List<Arrow>();
                 List<Arrow> linearBack = new List<Arrow>();
                 F.PartialSolve(linear, linearFwd, linearBack);
+                linearFwd = linearFwd.Select(i => Arrow.New(i.Left, i.Right.Substitute(nonlinearRow, 1))).ToList();
+                linearBack = linearBack.Select(i => Arrow.New(i.Left, i.Right.Substitute(nonlinearRow, 1))).ToList();
+                F = new SystemOfEquations(F.Select(i => i.Select(k => new KeyValuePair<Expression, Expression>(k.Key, k.Value.Substitute(nonlinearRow, 1)))), F.Unknowns);
                 if (linearFwd.Any())
                 {
                     solutions.Add(new LinearSolutions(linearFwd));
