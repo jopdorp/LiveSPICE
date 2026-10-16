@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiveSPICE.PluginLinux", "Li
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiveSPICE.Avalonia.Tests", "LiveSPICE.Avalonia.Tests\LiveSPICE.Avalonia.Tests.csproj", "{0ED01072-3C08-4934-BC3D-904C0D47B6AB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiveSPICE.NativeBridge", "LiveSPICE.NativeBridge\LiveSPICE.NativeBridge.csproj", "{6BAE1AFF-A317-4A1E-AD54-935001DB2398}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -68,6 +70,10 @@ Global
 		{0ED01072-3C08-4934-BC3D-904C0D47B6AB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0ED01072-3C08-4934-BC3D-904C0D47B6AB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0ED01072-3C08-4934-BC3D-904C0D47B6AB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6BAE1AFF-A317-4A1E-AD54-935001DB2398}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6BAE1AFF-A317-4A1E-AD54-935001DB2398}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6BAE1AFF-A317-4A1E-AD54-935001DB2398}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6BAE1AFF-A317-4A1E-AD54-935001DB2398}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{B38B8038-EBD1-4326-A01D-5AA1B7275A99} = {1D100B7C-E8B4-4909-878B-9F1EA4D8225D}

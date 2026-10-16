@@ -27,8 +27,10 @@ public static unsafe class Bridge
             instance.Processor.LoadSchematic(Marshal.PtrToStringUTF8((nint)path)!);
             // The first block only starts the background build; keep feeding silence until it lands so the
             // Expression compile and JIT happen here instead of on the audio thread.
-            while (!instance.Processor.IsReady)
+            for (long start = Environment.TickCount64; !instance.Processor.IsReady;)
             {
+                if (Environment.TickCount64 - start > 30000)
+                    throw new TimeoutException("Building the simulation took longer than 30 s.");
                 instance.Processor.RunSimulation(instance.Input, instance.Output, maxBlock);
                 Thread.Sleep(10);
             }

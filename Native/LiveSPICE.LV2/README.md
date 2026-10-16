@@ -10,13 +10,14 @@ The bundle currently contains two native LV2 plugins:
 Both build to real Linux ELF shared objects, unlike the AudioPlugSharp `.vst3` bridge that is Windows-only.
 
 It also exposes an LV2 state interface with a `https://livespice.org/ns/plugin#schematicPath` property. That is the Linux-native state hook needed for the generic LiveSPICE model where hosts save/restore the selected `.schx` path, matching the Windows plugin's program-state design.
+
 ## Build
 
 ```bash
-make -C Native/LiveSPICE.LV2 clean all
+make -C Native/LiveSPICE.LV2 clean all managed
 ```
 
-This needs the .NET 8 SDK: `all` publishes `LiveSPICE.NativeBridge` into `managed/` inside the bundle and links `libnethost` from the SDK. `make test-sim` runs the MXR Distortion + example through the generic plugin and prints input and output levels.
+The generic plugin links `libnethost` from the .NET 8 SDK, and `managed` publishes `LiveSPICE.NativeBridge` into `managed/` inside the bundle. `make test-sim` runs the MXR Distortion + example through the generic plugin and prints input and output levels.
 
 ## Test Discovery
 

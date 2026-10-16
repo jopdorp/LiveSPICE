@@ -1,6 +1,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,8 +43,10 @@ static void load_bridge(void)
     char_t hostfxr_path[4096];
     size_t size = sizeof(hostfxr_path) / sizeof(char_t);
     void* hostfxr = get_hostfxr_path(hostfxr_path, &size, NULL) == 0 ? dlopen(hostfxr_path, RTLD_NOW | RTLD_LOCAL) : NULL;
-    if (hostfxr == NULL)
+    if (hostfxr == NULL) {
+        fprintf(stderr, "LiveSPICE: .NET hostfxr not found, install the .NET 8 runtime or set DOTNET_ROOT\n");
         return;
+    }
 
     hostfxr_initialize_for_runtime_config_fn initialize = (hostfxr_initialize_for_runtime_config_fn)dlsym(hostfxr, "hostfxr_initialize_for_runtime_config");
     hostfxr_get_runtime_delegate_fn get_delegate = (hostfxr_get_runtime_delegate_fn)dlsym(hostfxr, "hostfxr_get_runtime_delegate");
@@ -56,23 +59,32 @@ static void load_bridge(void)
     int status = initialize(config, NULL, &context);
     load_assembly_and_get_function_pointer_fn load = NULL;
     if (status >= 0 && status <= 2 && context != NULL)
-        get_delegate(context, hdt_load_assembly_and_get_function_pointer, (void**)&load);
+        status = get_delegate(context, hdt_load_assembly_and_get_function_pointer, (void**)&load);
     if (context != NULL)
         close(context);
-    if (load == NULL)
+    if (load == NULL) {
+        fprintf(stderr, "LiveSPICE: cannot start .NET from %s (0x%x)\n", config, (unsigned)status);
         return;
+    }
 
     // Create is fetched last so a partial failure leaves it NULL and the plugin stays passthrough.
     const char* type = "LiveSPICE.NativeBridge.Bridge, LiveSPICE.NativeBridge";
     if (load(assembly, type, "SetControl", UNMANAGEDCALLERSONLY_METHOD, NULL, (void**)&bridge.set_control) == 0
         && load(assembly, type, "Process", UNMANAGEDCALLERSONLY_METHOD, NULL, (void**)&bridge.process) == 0
-        && load(assembly, type, "Destroy", UNMANAGEDCALLERSONLY_METHOD, NULL, (void**)&bridge.destroy) == 0)
-        load(assembly, type, "Create", UNMANAGEDCALLERSONLY_METHOD, NULL, (void**)&bridge.create);
+        && load(assembly, type, "Destroy", UNMANAGEDCALLERSONLY_METHOD, NULL, (void**)&bridge.destroy) == 0
+        && load(assembly, type, "Create", UNMANAGEDCALLERSONLY_METHOD, NULL, (void**)&bridge.create) == 0)
+        return;
+    bridge.create = NULL;
+    fprintf(stderr, "LiveSPICE: cannot load the bridge from %s\n", assembly);
 }
 
+typedef enum { JOB_LOAD, JOB_CONTROL, JOB_DESTROY } JobKind;
+
 typedef struct {
-    void* destroy;
-    char path[4096];
+    JobKind kind;
+    void* engine;
+    double value;
+    char text[4096];
 } Job;
 
 typedef enum {
@@ -85,11 +97,13 @@ typedef struct {
     const float* input;
     float* output;
     const LV2_Atom_Sequence* control_events;
-    char* schematic_path;
+    char schematic_path[4096];
+    char pending_path[4096];
     bool load_pending;
-    const char* bundle_path;
+    char* bundle_path;
     double sample_rate;
     void* engine;
+    void* retired;
     LV2_URID_Map* map;
     LV2_Worker_Schedule* schedule;
     LV2_URID atom_path;
@@ -125,20 +139,22 @@ static void map_features(LiveSpiceGeneric* self, const LV2_Feature* const* featu
 
 static void set_schematic_path(LiveSpiceGeneric* self, const char* path, uint32_t size)
 {
-    if (path == NULL)
-        return;
-
-    char* copy = (char*)calloc((size_t)size + 1, sizeof(char));
-    if (copy == NULL)
-        return;
-
-    if (size > 0)
-        memcpy(copy, path, size);
-    copy[size] = '\0';
-
-    free(self->schematic_path);
-    self->schematic_path = copy;
+    size_t length = strnlen(path, size < sizeof(self->pending_path) ? size : sizeof(self->pending_path) - 1);
+    memcpy(self->pending_path, path, length);
+    self->pending_path[length] = '\0';
     self->load_pending = true;
+}
+
+static bool schedule_job(LiveSpiceGeneric* self, JobKind kind, void* engine, double value, const char* text)
+{
+    Job job;
+    job.kind = kind;
+    job.engine = engine;
+    job.value = value;
+    size_t length = strnlen(text, sizeof(job.text) - 1);
+    memcpy(job.text, text, length);
+    job.text[length] = '\0';
+    return self->schedule->schedule_work(self->schedule->handle, (uint32_t)(offsetof(Job, text) + length + 1), &job) == LV2_WORKER_SUCCESS;
 }
 
 static void read_control_events(LiveSpiceGeneric* self)
@@ -153,7 +169,7 @@ static void read_control_events(LiveSpiceGeneric* self)
             const LV2_Atom* value = NULL;
             lv2_atom_object_get(object, self->control_name, &name, self->control_value, &value, 0);
             if (self->engine != NULL && name != NULL && name->type == self->atom_string && value != NULL && value->type == self->atom_double)
-                bridge.set_control(self->engine, (const char*)LV2_ATOM_BODY_CONST(name), ((const LV2_Atom_Double*)value)->body);
+                schedule_job(self, JOB_CONTROL, self->engine, ((const LV2_Atom_Double*)value)->body, (const char*)LV2_ATOM_BODY_CONST(name));
             continue;
         }
         if (event->body.type != self->atom_path && event->body.type != self->atom_string)
@@ -177,7 +193,7 @@ static LV2_Handle instantiate(const LV2_Descriptor* descriptor, double sample_ra
         free(self);
         return NULL;
     }
-    self->bundle_path = bundle_path;
+    self->bundle_path = strdup(bundle_path);
     self->sample_rate = sample_rate;
     return (LV2_Handle)self;
 }
@@ -207,18 +223,21 @@ static void run(LV2_Handle instance, uint32_t sample_count)
 {
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
     read_control_events(self);
+    if (self->load_pending && schedule_job(self, JOB_LOAD, NULL, 0, self->pending_path))
+        self->load_pending = false;
 
-    if (self->load_pending && self->schematic_path != NULL) {
-        Job job = { NULL, "" };
-        strncpy(job.path, self->schematic_path, sizeof(job.path) - 1);
-        self->schedule->schedule_work(self->schedule->handle, sizeof(job), &job);
-    }
-    self->load_pending = false;
+    if (self->retired != NULL && schedule_job(self, JOB_DESTROY, self->retired, 0, ""))
+        self->retired = NULL;
 
     if (self->input == NULL || self->output == NULL)
         return;
 
-    if (self->engine == NULL || bridge.process(self->engine, self->input, self->output, (int)sample_count) != 0)
+    if (self->engine != NULL && bridge.process(self->engine, self->input, self->output, (int)sample_count) != 0) {
+        fprintf(stderr, "LiveSPICE: simulation failed, passing audio through until the schematic is reloaded\n");
+        self->retired = self->engine;
+        self->engine = NULL;
+    }
+    if (self->engine == NULL)
         memmove(self->output, self->input, sample_count * sizeof(float));
 }
 
@@ -226,30 +245,31 @@ static LV2_Worker_Status work(LV2_Handle instance, LV2_Worker_Respond_Function r
 {
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
     const Job* job = (const Job*)data;
-    (void)size;
-    if (job->destroy != NULL) {
-        bridge.destroy(job->destroy);
+    if (job->kind == JOB_DESTROY)
+        bridge.destroy(job->engine);
+    if (job->kind == JOB_CONTROL)
+        bridge.set_control(job->engine, job->text, job->value);
+    if (job->kind != JOB_LOAD)
         return LV2_WORKER_SUCCESS;
-    }
 
-    void* engine = NULL;
-    if (job->path[0] != '\0') {
+    Job loaded;
+    memcpy(&loaded, job, size);
+    if (job->text[0] != '\0') {
         bridge_bundle_path = self->bundle_path;
         pthread_once(&bridge_once, load_bridge);
-        if (bridge.create == NULL || bridge.create(job->path, (int)self->sample_rate, MAX_BLOCK, &engine) != 0)
+        if (bridge.create == NULL || bridge.create(job->text, (int)self->sample_rate, MAX_BLOCK, &loaded.engine) != 0)
             return LV2_WORKER_ERR_UNKNOWN;
     }
-    return respond(handle, sizeof(engine), &engine);
+    return respond(handle, size, &loaded);
 }
 
 static LV2_Worker_Status work_response(LV2_Handle instance, uint32_t size, const void* body)
 {
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
-    (void)size;
-    void* retired = self->engine;
-    memcpy(&self->engine, body, sizeof(void*));
-    if (retired != NULL)
-        self->schedule->schedule_work(self->schedule->handle, sizeof(void*), &retired);
+    const Job* loaded = (const Job*)body;
+    self->retired = self->engine;
+    self->engine = loaded->engine;
+    memcpy(self->schematic_path, loaded->text, size - offsetof(Job, text));
     return LV2_WORKER_SUCCESS;
 }
 
@@ -263,7 +283,9 @@ static void cleanup(LV2_Handle instance)
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
     if (self->engine != NULL)
         bridge.destroy(self->engine);
-    free(self->schematic_path);
+    if (self->retired != NULL)
+        bridge.destroy(self->retired);
+    free(self->bundle_path);
     free(instance);
 }
 
@@ -273,7 +295,7 @@ static LV2_State_Status save_state(LV2_Handle instance, LV2_State_Store_Function
     (void)features;
 
     LiveSpiceGeneric* self = (LiveSpiceGeneric*)instance;
-    if (self->schematic_path_key == 0 || self->atom_path == 0 || self->schematic_path == NULL || self->schematic_path[0] == '\0')
+    if (self->schematic_path_key == 0 || self->atom_path == 0 || self->schematic_path[0] == '\0')
         return LV2_STATE_SUCCESS;
 
     return store(

@@ -16,8 +16,12 @@
 
 static const char* uris[64];
 static const char* schematic;
-static unsigned char queue[8][8192];
-static uint32_t queue_size[8], queued;
+typedef struct {
+    unsigned char data[8][4096];
+    uint32_t size[8], count;
+} Queue;
+
+static Queue jobs, responses;
 
 static LV2_URID map_uri(LV2_URID_Map_Handle handle, const char* uri)
 {
@@ -33,9 +37,12 @@ static LV2_URID_Map map = { NULL, map_uri };
 
 static LV2_Worker_Status enqueue(void* handle, uint32_t size, const void* data)
 {
-    (void)handle;
-    memcpy(queue[queued], data, size);
-    queue_size[queued++] = size;
+    Queue* queue = (Queue*)handle;
+    // Same limit as jalv's 4096-byte worker ring, which also stores a 32-bit size per message.
+    if (queue->count == 8 || size + sizeof(uint32_t) >= sizeof(queue->data[0]))
+        return LV2_WORKER_ERR_NO_SPACE;
+    memcpy(queue->data[queue->count], data, size);
+    queue->size[queue->count++] = size;
     return LV2_WORKER_SUCCESS;
 }
 
@@ -73,14 +80,11 @@ static int run_block(Plugin* p)
         p->input[i] = 0.25f * (float)sin(2.0 * M_PI * 440.0 * p->frame / RATE);
     p->descriptor->run(p->handle, BLOCK);
     p->events.sequence.atom.size = sizeof(LV2_Atom_Sequence_Body);
-    for (uint32_t i = 0; i < queued; i++) {
-        uint32_t size = queue_size[i];
-        queued = 0;
-        p->worker->work(p->handle, enqueue, NULL, size, queue[i]);
-        for (uint32_t j = 0; j < queued; j++)
-            p->worker->work_response(p->handle, queue_size[j], queue[j]);
-    }
-    queued = 0;
+    for (uint32_t i = 0; i < jobs.count; i++)
+        p->worker->work(p->handle, enqueue, &responses, jobs.size[i], jobs.data[i]);
+    for (uint32_t i = 0; i < responses.count; i++)
+        p->worker->work_response(p->handle, responses.size[i], responses.data[i]);
+    jobs.count = responses.count = 0;
     return memcmp(p->input, p->output, sizeof(p->input)) != 0;
 }
 
@@ -135,7 +139,7 @@ int main(int argc, char** argv)
     if (argc < 4)
         return 1;
     schematic = argv[2];
-    LV2_Worker_Schedule schedule = { NULL, enqueue };
+    LV2_Worker_Schedule schedule = { &jobs, enqueue };
     LV2_Feature map_feature = { LV2_URID__map, &map };
     LV2_Feature schedule_feature = { LV2_WORKER__schedule, &schedule };
     const LV2_Feature* features[] = { &map_feature, &schedule_feature, NULL };

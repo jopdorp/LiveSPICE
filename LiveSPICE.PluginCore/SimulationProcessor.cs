@@ -122,8 +122,9 @@ public class SimulationProcessor
 
         lock (sync)
         {
-            foreach (IComponentWrapper component in InteractiveComponents)
+            for (int i = 0; i < InteractiveComponents.Count; i++)
             {
+                IComponentWrapper component = InteractiveComponents[i];
                 if (component.NeedUpdate)
                 {
                     needUpdate = true;
